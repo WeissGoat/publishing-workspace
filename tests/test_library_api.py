@@ -213,3 +213,53 @@ def test_submission_api_error_responses(tmp_path: Path):
     )
     assert unknown_asset.status_code == 422
     assert unknown_asset.json()["detail"]["code"] == "invalid_submission"
+
+
+def test_update_build_image_endpoint(tmp_path: Path):
+    import io
+    from PIL import Image
+    from publishing_workspace.config import load_workspace
+    from publishing_workspace.tasks.paths import TaskPaths
+
+    client, _, _ = client_with_catalog(tmp_path)
+    paths, _ = load_workspace(client.app.state.publishing_root)
+    task_paths = TaskPaths.from_workspace(paths, "sub-mock-edit")
+    build_dir = task_paths.builds_root / "latest" / "output" / "post"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    orig_img_file = build_dir / "0001_test.png"
+
+    orig_im = Image.new("RGB", (64, 64), color="blue")
+    orig_im.save(orig_img_file, format="PNG")
+
+    edited_im = Image.new("RGB", (64, 64), color="red")
+    buf = io.BytesIO()
+    edited_im.save(buf, format="PNG")
+    edited_bytes = buf.getvalue()
+
+    # 1. 正常覆盖
+    resp = client.put(
+        "/api/submissions/sub-mock-edit/build-images/post/0001_test.png",
+        content=edited_bytes,
+        headers={"Content-Type": "image/png"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+    # 验证读取到的确实是新图片
+    with Image.open(orig_img_file) as im:
+        assert im.getpixel((0, 0)) == (255, 0, 0)
+
+    # 2. 非法 selection
+    bad_sel = client.put(
+        "/api/submissions/sub-mock-edit/build-images/invalid/0001_test.png",
+        content=edited_bytes,
+    )
+    assert bad_sel.status_code == 400
+
+    # 3. 非法图片字节
+    bad_img = client.put(
+        "/api/submissions/sub-mock-edit/build-images/post/0001_test.png",
+        content=b"not an image",
+    )
+    assert bad_img.status_code == 400
+

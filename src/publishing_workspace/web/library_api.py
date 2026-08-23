@@ -513,6 +513,56 @@ def register_library_routes(app: FastAPI) -> None:
         media_type = media_types.get(image_path.suffix.casefold(), "application/octet-stream")
         return FileResponse(image_path, media_type=media_type)
 
+    @app.put("/api/submissions/{task_id}/build-images/{selection}/{filename}")
+    async def update_build_image(task_id: str, selection: str, filename: str, req: Request):
+        import io
+        import os
+        from pathlib import Path
+        from PIL import Image
+        from ..config import load_workspace
+        from ..tasks.paths import TaskPaths
+
+        if selection not in ("all", "post", "cover"):
+            raise HTTPException(status_code=400, detail="Invalid selection")
+
+        body = await req.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="Empty image data")
+
+        try:
+            with Image.open(io.BytesIO(body)) as img:
+                img.verify()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid image content: {exc}")
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        latest_dir = task_paths.builds_root / "latest"
+        build_dir = latest_dir if latest_dir.is_dir() else None
+        if not build_dir and task_paths.builds_root.is_dir():
+            candidates = [d for d in task_paths.builds_root.iterdir() if d.is_dir() and d.name != "history"]
+            if candidates:
+                candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                build_dir = candidates[0]
+
+        if not build_dir:
+            raise HTTPException(status_code=404, detail="Build not found")
+
+        target_file = build_dir / "output" / selection / filename
+        if not target_file.is_file():
+            raise HTTPException(status_code=404, detail="Image not found in build")
+
+        tmp_file = target_file.with_name(f".{target_file.name}.tmp")
+        tmp_file.write_bytes(body)
+        os.replace(tmp_file, target_file)
+
+        return {
+            "success": True,
+            "filename": filename,
+            "selection": selection,
+            "size_bytes": len(body),
+        }
+
     @app.get("/api/submissions/{task_id}/build-archives/{filename}")
     def get_build_archive(task_id: str, filename: str):
         from pathlib import Path

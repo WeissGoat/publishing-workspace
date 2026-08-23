@@ -39,6 +39,16 @@
     expandedFacetCategories: new Set(["clothing"]),
     activeExportJob: null,
     exportPollTimer: null,
+    lightbox: {
+      activeAssetId: null,
+      list: [],
+      index: 0,
+      mode: "view",
+      isExported: false,
+      exportItem: null,
+      exportTabName: null,
+      painterro: null,
+    },
   };
 
   const FACET_CONFIG = [
@@ -145,6 +155,11 @@
 
     // Pro Lightbox Viewer
     previewDialog: document.getElementById("preview-dialog"),
+    lightboxContainer: document.querySelector(".lightbox-container"),
+    lightboxModeTabs: document.getElementById("lightbox-mode-tabs"),
+    lightboxImageArea: document.getElementById("lightbox-image-area"),
+    lightboxEditorArea: document.getElementById("lightbox-editor-area"),
+    painterroContainer: document.getElementById("painterro-container"),
     previewImage: document.getElementById("preview-image"),
     closePreview: document.getElementById("close-preview"),
     lightboxFilename: document.getElementById("lightbox-filename"),
@@ -1012,6 +1027,13 @@
     const total = state.lightbox.assetList.length;
     const currentNum = state.lightbox.currentIndex + 1;
 
+    state.lightbox.isExported = false;
+    state.lightbox.exportItem = null;
+    if (elements.lightboxModeTabs) {
+      elements.lightboxModeTabs.classList.add("hidden");
+    }
+    switchLightboxMode("view");
+
     // 1. 顶部 Header 状态
     elements.lightboxCounter.textContent = `${currentNum} / ${total}`;
     elements.lightboxFilename.textContent = item?.display_name || assetId;
@@ -1560,12 +1582,102 @@
     }
   }
 
+  function switchLightboxMode(mode) {
+    state.lightbox.mode = mode;
+    if (elements.lightboxModeTabs) {
+      elements.lightboxModeTabs.querySelectorAll("[data-lb-tab]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.lbTab === mode);
+      });
+    }
+
+    if (mode === "edit") {
+      if (elements.lightboxContainer) elements.lightboxContainer.classList.add("mode-edit");
+      initPainterroForCurrentExportImage();
+    } else {
+      if (elements.lightboxContainer) elements.lightboxContainer.classList.remove("mode-edit");
+    }
+  }
+
+  function initPainterroForCurrentExportImage() {
+    if (!window.Painterro) {
+      showNotice("图片编辑器 (Painterro) 正在加载中，请稍候...", "warning");
+      return;
+    }
+    const item = state.lightbox.exportItem;
+    if (!item) return;
+
+    if (elements.painterroContainer) {
+      elements.painterroContainer.innerHTML = "";
+    }
+
+    try {
+      const ptr = window.Painterro({
+        id: "painterro-container",
+        activeColor: "#000000",
+        activeColorAlpha: 1.0,
+        defaultTool: "pixelate",
+        availableTools: ["pixelate", "brush", "rect", "eraser", "zoom", "undo", "redo", "save"],
+        saveHandler: async (image, done) => {
+          try {
+            const blob = await new Promise((resolve) => image.asBlob("image/png", 0.95, resolve));
+            const taskId = state.currentSubmission.task_id;
+            const tabName = state.lightbox.exportTabName;
+            const filename = item.filename;
+
+            showNotice("正在保存手动打码修改...", "info");
+            const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(tabName)}/${encodeURIComponent(filename)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "image/png" },
+              body: blob,
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.detail || `保存失败 (${res.status})`);
+            }
+
+            done(true);
+            showNotice("✅ 手动打码已成功保存到发布包！", "success");
+
+            // 刷新大图与面板缩略图
+            const cacheBustUrl = `${item.preview_url.split("?")[0]}?t=${Date.now()}`;
+            item.preview_url = cacheBustUrl;
+            elements.previewImage.src = cacheBustUrl;
+
+            // 重新渲染当前图集缩略图
+            renderExportedThumbsGrid();
+
+            // 自动切回 view 模式
+            switchLightboxMode("view");
+          } catch (err) {
+            showNotice(`保存编辑失败：${err.message}`, "error");
+            done(false);
+          }
+        },
+      });
+
+      state.lightbox.painterro = ptr;
+      ptr.show(item.preview_url);
+    } catch (e) {
+      console.error("Painterro 初始化异常", e);
+      showNotice(`初始化图片编辑器失败：${e.message}`, "error");
+    }
+  }
+
   function openExportedLightbox(index, imgList, tabName) {
     if (!imgList || !imgList[index]) return;
     const item = imgList[index];
     state.lightbox.activeAssetId = null;
     state.lightbox.list = [];
     state.lightbox.index = 0;
+    state.lightbox.isExported = true;
+    state.lightbox.exportItem = item;
+    state.lightbox.exportTabName = tabName;
+
+    // 显示模式切换页签栏
+    if (elements.lightboxModeTabs) {
+      elements.lightboxModeTabs.classList.remove("hidden");
+    }
+    switchLightboxMode("view");
 
     elements.previewImage.src = item.preview_url;
     elements.previewImage.alt = item.filename;
@@ -1972,6 +2084,14 @@
   });
 
   // Pro Lightbox 事件绑定
+  if (elements.lightboxModeTabs) {
+    elements.lightboxModeTabs.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-lb-tab]");
+      if (!btn) return;
+      switchLightboxMode(btn.dataset.lbTab);
+    });
+  }
+
   if (elements.closePreview) {
     elements.closePreview.addEventListener("click", () => {
       elements.previewDialog.close();

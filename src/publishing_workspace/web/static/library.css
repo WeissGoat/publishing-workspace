@@ -929,12 +929,70 @@ input[type="search"]::-webkit-search-results-decoration {
   color: #fff;
 }
 
+/* 🌟 Lightbox 顶部模式页签 */
+.lightbox-mode-tabs {
+  background: #18202c;
+  border: 1px solid #2d3848;
+  border-radius: 6px;
+  padding: 3px;
+  display: inline-flex;
+}
+.lightbox-mode-tabs .segment-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.lightbox-mode-tabs .segment-btn:hover {
+  color: #f1f5f9;
+}
+.lightbox-mode-tabs .segment-btn.active {
+  background: #0ea5e9;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
 /* 主体分栏 */
 .lightbox-body {
   display: flex;
   flex: 1;
   min-height: 0;
   background: #0d1117;
+  position: relative;
+}
+
+/* 🎨 图片编辑与手动打码工作台 */
+.lightbox-editor-area {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  background: #0a0e14;
+  overflow: hidden;
+}
+
+.painterro-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* 编辑模式时全屏沉浸式工作台 */
+.lightbox-container.mode-edit .lightbox-sidebar {
+  display: none;
+}
+.lightbox-container.mode-edit .lightbox-image-area {
+  display: none;
+}
+.lightbox-container.mode-edit .lightbox-editor-area {
+  display: flex;
 }
 
 /* 左侧大图展示区 */

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260823-21">
+  <link rel="stylesheet" href="/library.css?v=20260823-22">
 </head>
 <body>
   <main class="app-shell">
@@ -324,6 +324,11 @@
           <h3 id="lightbox-filename" class="lightbox-filename">素材名称</h3>
           <p id="lightbox-filepath" class="lightbox-filepath" title="点击复制完整路径"></p>
         </div>
+        <!-- 🌟 Lightbox 视图与图片编辑页签切换 -->
+        <div id="lightbox-mode-tabs" class="segmented-control lightbox-mode-tabs">
+          <button type="button" class="segment-btn active" data-lb-tab="view">🔍 查看详情</button>
+          <button type="button" class="segment-btn" data-lb-tab="edit">🎨 图片编辑 (手动打码)</button>
+        </div>
         <div class="lightbox-header-actions">
           <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
           <button id="close-preview" class="lightbox-close-btn" type="button" title="关闭 (Esc)">&#10005;</button>
@@ -333,12 +338,17 @@
       <!-- 主体分栏 -->
       <div class="lightbox-body">
         <!-- 左侧大图展示区 -->
-        <div class="lightbox-image-area">
+        <div id="lightbox-image-area" class="lightbox-image-area">
           <button id="lightbox-prev-btn" class="lightbox-nav-btn prev" type="button" title="上一张 (←)">&#10094;</button>
           <div class="lightbox-img-wrapper">
             <img id="preview-image" alt="素材大图预览">
           </div>
           <button id="lightbox-next-btn" class="lightbox-nav-btn next" type="button" title="下一张 (→)">&#10095;</button>
+        </div>
+
+        <!-- 🎨 图片编辑与手动打码工作台（Painterro 挂载区） -->
+        <div id="lightbox-editor-area" class="lightbox-editor-area hidden">
+          <div id="painterro-container" class="painterro-container"></div>
         </div>
 
         <!-- 右侧元数据与定制详情侧栏 -->
@@ -423,6 +433,7 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260823-21" defer></script>
+  <script src="/vendor/painterro.min.js"></script>
+  <script src="/library.js?v=20260823-22" defer></script>
 </body>
 </html>
