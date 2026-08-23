@@ -1594,6 +1594,19 @@
         activeColor: "#000000",
         activeColorAlpha: 1.0,
         defaultTool: "pixelize",
+        pixelizePixelSize: "20%",
+        language: "zh",
+        translation: {
+          name: "zh",
+          strings: {
+            backgroundColor: "画布背景色",
+            pixelizePixelSize: "马赛克颗粒大小 (默认 20% 或 15px)",
+            apply: "应用",
+            cancel: "取消",
+            save: "保存",
+            wrongPixelSizeValue: "颗粒大小格式错误，请输入如 20% 或 15px",
+          },
+        },
         availableTools: ["crop", "pixelize", "brush", "rect", "eraser", "undo", "redo", "save", "open", "zoomin", "zoomout", "settings"],
         saveHandler: async (image, done) => {
           const item = state.lightbox.exportItem;
