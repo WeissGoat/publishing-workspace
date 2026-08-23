@@ -133,6 +133,11 @@
     progressPercent: document.getElementById("progress-percent"),
     progressFile: document.getElementById("progress-file"),
     exportCompletedBox: document.getElementById("export-completed-box"),
+    exportTimeLabel: document.getElementById("export-time-label"),
+    pipelineOpsList: document.getElementById("pipeline-ops-list"),
+    exportArchivesContainer: document.getElementById("export-archives-container"),
+    exportTabsContainer: document.getElementById("export-tabs-container"),
+    exportedThumbsGrid: document.getElementById("exported-thumbs-grid"),
     openExportDirBtn: document.getElementById("open-export-dir-btn"),
     exportErrorBox: document.getElementById("export-error-box"),
     exportErrorText: document.getElementById("export-error-text"),
@@ -1423,6 +1428,7 @@
     elements.exportProgressBox.classList.add("hidden");
     elements.exportCompletedBox.classList.add("hidden");
     elements.exportErrorBox.classList.add("hidden");
+    state.latestBuildData = null;
     if (state.exportPollTimer) {
       clearInterval(state.exportPollTimer);
       state.exportPollTimer = null;
@@ -1431,18 +1437,152 @@
 
   async function checkLastExportForTask(taskId) {
     resetExportUI();
+    if (!taskId) return;
     try {
-      const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/exports`);
-      if (res.ok) {
-        const jobs = await res.json();
-        if (jobs && jobs.length > 0) {
-          const latest = jobs[0];
-          handleExportJobUpdate(latest);
+      await loadLatestBuildDetails(taskId);
+    } catch (err) {
+      // 忽略
+    }
+  }
+
+  async function loadLatestBuildDetails(taskId) {
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/latest-build`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.has_build) {
+        elements.exportCompletedBox.classList.add("hidden");
+        state.latestBuildData = null;
+        return;
+      }
+
+      state.latestBuildData = data;
+      elements.exportCompletedBox.classList.remove("hidden");
+
+      // 1. 导出时间
+      if (elements.exportTimeLabel && data.exported_at) {
+        const d = new Date(data.exported_at);
+        elements.exportTimeLabel.textContent = `构建时间: ${d.toLocaleString("zh-CN")}`;
+      }
+
+      // 2. 流水线算子信息
+      if (elements.pipelineOpsList) {
+        elements.pipelineOpsList.innerHTML = "";
+        const ops = data.operations || [];
+        for (const op of ops) {
+          const item = document.createElement("div");
+          item.className = "pipeline-op-item";
+          const badgeClass = op.enabled ? "enabled" : "disabled";
+          const badgeText = op.enabled ? "已启用" : "未开启";
+          item.innerHTML = `
+            <span class="pipeline-op-badge ${badgeClass}">${badgeText}</span>
+            <div class="pipeline-op-content">
+              <span class="pipeline-op-name">${escapeHtml(op.title)}</span>
+              <span class="pipeline-op-desc">${escapeHtml(op.description)}</span>
+            </div>
+          `;
+          elements.pipelineOpsList.appendChild(item);
         }
       }
+
+      // 3. Zip 归档下载
+      if (elements.exportArchivesContainer) {
+        elements.exportArchivesContainer.innerHTML = "";
+        const archives = data.archives || [];
+        for (const arch of archives) {
+          const btn = document.createElement("a");
+          btn.className = "archive-download-btn";
+          btn.href = arch.download_url;
+          btn.download = arch.filename;
+          const mb = (arch.size_bytes / (1024 * 1024)).toFixed(2);
+          btn.innerHTML = `📦 下载 ${escapeHtml(arch.filename)} (${mb} MB)`;
+          elements.exportArchivesContainer.appendChild(btn);
+        }
+      }
+
+      // 4. 更新 Tab 数量角标
+      const images = data.images || { all: [], post: [], cover: [] };
+      if (elements.exportTabsContainer) {
+        const tabPost = elements.exportTabsContainer.querySelector('[data-export-tab="post"]');
+        const tabAll = elements.exportTabsContainer.querySelector('[data-export-tab="all"]');
+        const tabCover = elements.exportTabsContainer.querySelector('[data-export-tab="cover"]');
+        if (tabPost) tabPost.textContent = `正文 post (${images.post?.length || 0})`;
+        if (tabAll) tabAll.textContent = `全集 all (${images.all?.length || 0})`;
+        if (tabCover) tabCover.textContent = `封面 cover (${images.cover?.length || 0})`;
+      }
+
+      renderExportedThumbsGrid();
     } catch (err) {
-      // 忽略导出任务不存在
+      console.warn("加载最新导出详情失败", err);
     }
+  }
+
+  function renderExportedThumbsGrid() {
+    if (!elements.exportedThumbsGrid || !state.latestBuildData) return;
+    elements.exportedThumbsGrid.innerHTML = "";
+    const tab = state.currentExportTab || "post";
+    const imgList = state.latestBuildData.images?.[tab] || [];
+
+    if (!imgList.length) {
+      elements.exportedThumbsGrid.innerHTML = '<div class="helper-text" style="grid-column: 1 / -1; text-align: center; padding: 12px;">该集合下暂无导出图片</div>';
+      return;
+    }
+
+    for (let i = 0; i < imgList.length; i++) {
+      const imgItem = imgList[i];
+      const card = document.createElement("div");
+      card.className = "exported-thumb-card";
+      card.title = `点击查看成品大图: ${imgItem.filename}`;
+      const kb = Math.round(imgItem.size_bytes / 1024);
+      card.innerHTML = `
+        <div class="exported-thumb-img-wrap">
+          <span class="exported-thumb-order">#${i + 1}</span>
+          <img class="exported-thumb-img" src="${imgItem.preview_url}" alt="${escapeHtml(imgItem.filename)}" loading="lazy">
+        </div>
+        <div class="exported-thumb-meta">
+          <span class="exported-thumb-name">${escapeHtml(imgItem.filename)}</span>
+          <span class="helper-text" style="font-size:9px;">${kb} KB</span>
+        </div>
+      `;
+
+      card.addEventListener("click", () => {
+        openExportedLightbox(i, imgList, tab);
+      });
+
+      elements.exportedThumbsGrid.appendChild(card);
+    }
+  }
+
+  function openExportedLightbox(index, imgList, tabName) {
+    if (!imgList || !imgList[index]) return;
+    const item = imgList[index];
+    state.lightbox.activeAssetId = null;
+    state.lightbox.list = [];
+    state.lightbox.index = 0;
+
+    elements.previewImage.src = item.preview_url;
+    elements.previewImage.alt = item.filename;
+    elements.lightboxFilename.textContent = `[导出成品·${tabName}] ${item.filename}`;
+    elements.lightboxFilepath.textContent = `${state.latestBuildData.output_dir}\\output\\${tabName}\\${item.filename}`;
+    elements.lightboxCounter.textContent = `${index + 1} / ${imgList.length}`;
+
+    // 隐藏打码和收藏按钮，这是成品图
+    elements.lightboxFavoriteBtn.classList.add("hidden");
+    elements.lightboxPostedBtn.classList.add("hidden");
+
+    elements.lightboxPrevBtn.disabled = index <= 0;
+    elements.lightboxNextBtn.disabled = index >= imgList.length - 1;
+
+    // 绑定前后切换
+    elements.lightboxPrevBtn.onclick = () => {
+      if (index > 0) openExportedLightbox(index - 1, imgList, tabName);
+    };
+    elements.lightboxNextBtn.onclick = () => {
+      if (index < imgList.length - 1) openExportedLightbox(index + 1, imgList, tabName);
+    };
+
+    elements.previewDialog.showModal();
   }
 
   async function handleStartExport() {
@@ -1489,9 +1629,11 @@
         state.exportPollTimer = null;
       }
       elements.exportProgressBox.classList.add("hidden");
-      elements.exportCompletedBox.classList.remove("hidden");
       elements.exportErrorBox.classList.add("hidden");
       elements.startExportBtn.disabled = false;
+      if (state.currentSubmission.task_id) {
+        loadLatestBuildDetails(state.currentSubmission.task_id);
+      }
     } else if (job.status === "failed" || job.status === "interrupted") {
       if (state.exportPollTimer) {
         clearInterval(state.exportPollTimer);
@@ -1519,9 +1661,10 @@
   }
 
   async function handleOpenExportDir() {
-    if (!state.activeExportJob?.job_id) return;
+    const taskId = state.currentSubmission.task_id;
+    if (!taskId) return;
     try {
-      const res = await fetch(`/api/export-jobs/${encodeURIComponent(state.activeExportJob.job_id)}/open-output`, {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/open-latest-build`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -1798,6 +1941,17 @@
 
   elements.startExportBtn.addEventListener("click", handleStartExport);
   elements.openExportDirBtn.addEventListener("click", handleOpenExportDir);
+
+  if (elements.exportTabsContainer) {
+    elements.exportTabsContainer.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-export-tab]");
+      if (!btn) return;
+      elements.exportTabsContainer.querySelectorAll("[data-export-tab]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.currentExportTab = btn.dataset.exportTab;
+      renderExportedThumbsGrid();
+    });
+  }
 
   elements.refreshAllBtn.addEventListener("click", () => {
     snapshotCache.clear();

@@ -1312,6 +1312,226 @@ input[type="search"]::-webkit-search-results-decoration {
 
 .hidden { display: none !important; }
 
+/* 导出状态与流水线信息卡片 */
+.export-status-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.export-status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.export-badge-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.export-time-label {
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* 流水线算子列表 */
+.pipeline-ops-section {
+  background: #ffffff;
+  border: 1px solid #edf2f7;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.pipeline-ops-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.pipeline-ops-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pipeline-op-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+}
+.pipeline-op-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.pipeline-op-badge.enabled {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+.pipeline-op-badge.disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  border: 1px solid #e2e8f0;
+}
+.pipeline-op-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pipeline-op-name {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 11px;
+}
+.pipeline-op-desc {
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.export-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.export-archives-container {
+  display: inline-flex;
+  gap: 6px;
+}
+.archive-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 5px 10px;
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.archive-download-btn:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+/* 发布包图集画廊 */
+.exported-gallery-section {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.exported-gallery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.exported-gallery-title {
+  font-size: 13px;
+  color: #0f172a;
+  font-weight: 600;
+}
+.compact-segments {
+  background: #f1f5f9;
+  padding: 2px;
+  border-radius: 6px;
+}
+.compact-segments .segment-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.exported-thumbs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.exported-thumb-card {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+.exported-thumb-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+  border-color: #3b82f6;
+}
+.exported-thumb-img-wrap {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+.exported-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+.exported-thumb-card:hover .exported-thumb-img {
+  transform: scale(1.04);
+}
+.exported-thumb-order {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+.exported-thumb-meta {
+  padding: 4px 6px;
+  background: #ffffff;
+}
+.exported-thumb-name {
+  font-size: 10px;
+  color: #475569;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
 @media (max-width: 900px) {
   .workspace-layout { grid-template-columns: 1fr; }
 }

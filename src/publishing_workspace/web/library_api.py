@@ -321,6 +321,218 @@ def register_library_routes(app: FastAPI) -> None:
                 },
             )
 
+    @app.get("/api/submissions/{task_id}/latest-build")
+    def get_latest_submission_build(task_id: str):
+        import datetime
+        import json
+        from pathlib import Path
+        from ..config import load_workspace
+        from ..tasks.paths import TaskPaths
+        from ..tasks.repository import TaskRepository
+
+        paths, workspace_config = load_workspace(app.state.publishing_root)
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        if not task_paths.task_root.is_dir():
+            return JSONResponse(
+                status_code=404,
+                content={"detail": {"code": "task_not_found", "message": f"任务不存在：{task_id}"}},
+            )
+
+        # 定位最新导出目录
+        latest_dir = task_paths.builds_root / "latest"
+        build_dir = None
+        if latest_dir.is_dir():
+            build_dir = latest_dir
+        elif task_paths.builds_root.is_dir():
+            candidates = [d for d in task_paths.builds_root.iterdir() if d.is_dir() and d.name != "history"]
+            if candidates:
+                candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                build_dir = candidates[0]
+
+        if not build_dir or not build_dir.is_dir():
+            return {"has_build": False}
+
+        # 读取 build_manifest.json
+        manifest_path = build_dir / "build_manifest.json"
+        manifest_data = {}
+        if manifest_path.is_file():
+            try:
+                manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        build_id = manifest_data.get("build_id", build_dir.name)
+        mtime = build_dir.stat().st_mtime
+        exported_at = datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc).isoformat()
+
+        # 读取 task.yaml 中的处理配置
+        try:
+            task_config = TaskRepository.load(task_paths)
+            proc_config = task_config.processing
+        except Exception:
+            proc_config = None
+
+        # 整理流水线算子 (Pipeline Operations)
+        operations = []
+        if proc_config:
+            # 1. strip_metadata
+            strip_op = proc_config.operations.get("strip_metadata")
+            strip_enabled = strip_op.enabled if strip_op else True
+            operations.append({
+                "name": "strip_metadata",
+                "title": "清除图片元数据 (EXIF & AI Prompt)",
+                "enabled": strip_enabled,
+                "description": "已彻底剥离 AI 生图 Prompt、Workflow 参数与 EXIF 信息，保护工作流隐私。" if strip_enabled else "未启用（保留原始生图参数）",
+            })
+
+            # 2. mosaic
+            mosaic_op = proc_config.operations.get("mosaic")
+            mosaic_enabled = mosaic_op.enabled if mosaic_op else False
+            if mosaic_enabled:
+                opts = mosaic_op.options if mosaic_op else {}
+                detector = opts.get("detector", "yolo")
+                method = opts.get("method", "pixelate")
+                parts = opts.get("parts", ["nipples", "penis", "pussy"])
+                parts_str = ", ".join(parts) if isinstance(parts, list) else str(parts)
+                operations.append({
+                    "name": "mosaic",
+                    "title": "AI 智能自动打码 (Auto Mosaic)",
+                    "enabled": True,
+                    "description": f"已启用自动打码：检测器 [{detector}]，方式 [{method}]，检测部位 [{parts_str}]",
+                })
+            else:
+                operations.append({
+                    "name": "mosaic",
+                    "title": "AI 智能自动打码 (Auto Mosaic)",
+                    "enabled": False,
+                    "description": "未启用（原图直通导出）",
+                })
+
+        # 扫描 output 各集合图片
+        images = {"all": [], "post": [], "cover": []}
+        output_root = build_dir / "output"
+        image_exts = set(workspace_config.image_extensions)
+        if output_root.is_dir():
+            for sel in ("all", "post", "cover"):
+                sel_dir = output_root / sel
+                if sel_dir.is_dir():
+                    for f in sorted(sel_dir.iterdir()):
+                        if f.is_file() and f.suffix.casefold() in image_exts:
+                            images[sel].append({
+                                "filename": f.name,
+                                "preview_url": f"/api/submissions/{task_id}/build-images/{sel}/{f.name}",
+                                "size_bytes": f.stat().st_size,
+                            })
+
+        # 扫描 archives 压缩包
+        archives = []
+        archives_root = build_dir / "archives"
+        if archives_root.is_dir():
+            for f in sorted(archives_root.iterdir()):
+                if f.is_file() and f.suffix.casefold() == ".zip":
+                    archives.append({
+                        "filename": f.name,
+                        "download_url": f"/api/submissions/{task_id}/build-archives/{f.name}",
+                        "size_bytes": f.stat().st_size,
+                    })
+
+        return {
+            "has_build": True,
+            "build_id": build_id,
+            "output_dir": str(build_dir),
+            "exported_at": exported_at,
+            "manifest": manifest_data,
+            "operations": operations,
+            "images": images,
+            "archives": archives,
+        }
+
+    @app.get("/api/submissions/{task_id}/build-images/{selection}/{filename}")
+    def get_build_image(task_id: str, selection: str, filename: str):
+        from pathlib import Path
+        from fastapi.responses import FileResponse
+        from ..config import load_workspace
+        from ..tasks.paths import TaskPaths
+
+        if selection not in ("all", "post", "cover"):
+            raise HTTPException(status_code=400, detail="Invalid selection")
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        latest_dir = task_paths.builds_root / "latest"
+        build_dir = latest_dir if latest_dir.is_dir() else None
+        if not build_dir and task_paths.builds_root.is_dir():
+            candidates = [d for d in task_paths.builds_root.iterdir() if d.is_dir() and d.name != "history"]
+            if candidates:
+                candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                build_dir = candidates[0]
+
+        if not build_dir:
+            raise HTTPException(status_code=404, detail="Build not found")
+
+        image_path = build_dir / "output" / selection / filename
+        if not image_path.is_file():
+            raise HTTPException(status_code=404, detail="Image not found in build")
+
+        media_types = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+        media_type = media_types.get(image_path.suffix.casefold(), "application/octet-stream")
+        return FileResponse(image_path, media_type=media_type)
+
+    @app.get("/api/submissions/{task_id}/build-archives/{filename}")
+    def get_build_archive(task_id: str, filename: str):
+        from pathlib import Path
+        from fastapi.responses import FileResponse
+        from ..config import load_workspace
+        from ..tasks.paths import TaskPaths
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        latest_dir = task_paths.builds_root / "latest"
+        build_dir = latest_dir if latest_dir.is_dir() else None
+        if not build_dir and task_paths.builds_root.is_dir():
+            candidates = [d for d in task_paths.builds_root.iterdir() if d.is_dir() and d.name != "history"]
+            if candidates:
+                candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+                build_dir = candidates[0]
+
+        if not build_dir:
+            raise HTTPException(status_code=404, detail="Build not found")
+
+        archive_path = build_dir / "archives" / filename
+        if not archive_path.is_file():
+            raise HTTPException(status_code=404, detail="Archive not found")
+
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename=filename,
+        )
+
+    @app.post("/api/submissions/{task_id}/open-latest-build")
+    def open_latest_submission_build(task_id: str):
+        import os
+        import subprocess
+        from pathlib import Path
+        from ..config import load_workspace
+        from ..tasks.paths import TaskPaths
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        latest_dir = task_paths.builds_root / "latest"
+        target_dir = latest_dir if latest_dir.is_dir() else task_paths.builds_root
+
+        if not target_dir.is_dir():
+            raise HTTPException(status_code=404, detail="导出目录不存在")
+
+        if os.name == "nt":
+            subprocess.Popen(["explorer", str(target_dir)])
+        return {"output_dir": str(target_dir)}
+
     @app.get("/api/favorites")
     def get_favorites(import_id: str | None = None):
         from ..catalog.repository import CatalogRepository
