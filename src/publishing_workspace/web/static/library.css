@@ -973,7 +973,8 @@ input[type="search"]::-webkit-search-results-decoration {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100%;
+  width: 100%;
+  height: calc(90vh - 80px);
   background: #0a0e14;
   overflow: hidden;
 }
@@ -984,15 +985,30 @@ input[type="search"]::-webkit-search-results-decoration {
   position: relative;
 }
 
+.painterro-container .ptro-holder-wrapper {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.painterro-container .ptro-tool-open,
+.painterro-container [data-tool="open"] {
+  display: none !important;
+}
+
 /* 编辑模式时全屏沉浸式工作台 */
 .lightbox-container.mode-edit .lightbox-sidebar {
-  display: none;
+  display: none !important;
 }
 .lightbox-container.mode-edit .lightbox-image-area {
-  display: none;
+  display: none !important;
 }
 .lightbox-container.mode-edit .lightbox-editor-area {
-  display: flex;
+  display: flex !important;
 }
 
 /* 左侧大图展示区 */

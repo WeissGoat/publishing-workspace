@@ -1592,9 +1592,13 @@
 
     if (mode === "edit") {
       if (elements.lightboxContainer) elements.lightboxContainer.classList.add("mode-edit");
+      if (elements.lightboxImageArea) elements.lightboxImageArea.classList.add("hidden");
+      if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.remove("hidden");
       initPainterroForCurrentExportImage();
     } else {
       if (elements.lightboxContainer) elements.lightboxContainer.classList.remove("mode-edit");
+      if (elements.lightboxImageArea) elements.lightboxImageArea.classList.remove("hidden");
+      if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.add("hidden");
     }
   }
 
@@ -1615,11 +1619,12 @@
         id: "painterro-container",
         activeColor: "#000000",
         activeColorAlpha: 1.0,
-        defaultTool: "pixelate",
-        availableTools: ["pixelate", "brush", "rect", "eraser", "zoom", "undo", "redo", "save"],
+        defaultTool: "pixelize",
+        availableTools: ["crop", "pixelize", "brush", "rect", "eraser", "undo", "redo", "save", "open", "zoomin", "zoomout", "settings"],
         saveHandler: async (image, done) => {
           try {
-            const blob = await new Promise((resolve) => image.asBlob("image/png", 0.95, resolve));
+            const dataUrl = image.asDataURL("image/png");
+            const blob = await fetch(dataUrl).then((r) => r.blob());
             const taskId = state.currentSubmission.task_id;
             const tabName = state.lightbox.exportTabName;
             const filename = item.filename;
@@ -1656,7 +1661,16 @@
       });
 
       state.lightbox.painterro = ptr;
-      ptr.show(item.preview_url);
+      // 使用 Blob ObjectURL 保证图片即刻绘制在画布上
+      fetch(item.preview_url)
+        .then((res) => res.blob())
+        .then((blob) => {
+          const objectUrl = URL.createObjectURL(blob);
+          ptr.show(objectUrl);
+        })
+        .catch(() => {
+          ptr.show(item.preview_url);
+        });
     } catch (e) {
       console.error("Painterro 初始化异常", e);
       showNotice(`初始化图片编辑器失败：${e.message}`, "error");
