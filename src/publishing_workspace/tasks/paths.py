@@ -38,6 +38,8 @@ class TaskPaths:
         self.candidates_snapshot = self.selection_root / "candidates.snapshot.json"
         self.candidates_playlist = self.selection_root / "candidates.nvpls"
         self.builds_root = self.task_root / "builds"
+        self.latest_build_dir = self.builds_root / "latest"
+        self.history_builds_dir = self.builds_root / "history"
 
     @classmethod
     def from_workspace(cls, workspace: WorkspacePaths, task_id: str) -> "TaskPaths":

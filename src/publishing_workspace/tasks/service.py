@@ -105,7 +105,17 @@ class TaskWorkflowService:
             for name, directory in task_paths.selection_dirs.items()
         }
         history_count = sum(1 for path in task_paths.history_dir.glob("*.json"))
-        build_count = sum(1 for path in task_paths.builds_root.iterdir() if path.is_dir())
+        build_count = 0
+        if task_paths.builds_root.is_dir():
+            if (task_paths.builds_root / "latest").is_dir():
+                build_count += 1
+            hist_dir = task_paths.builds_root / "history"
+            if hist_dir.is_dir():
+                build_count += sum(1 for p in hist_dir.iterdir() if p.is_dir())
+            build_count += sum(
+                1 for p in task_paths.builds_root.iterdir()
+                if p.is_dir() and p.name not in ("latest", "history")
+            )
         return {
             "task_id": config.task_id,
             "title": config.title,

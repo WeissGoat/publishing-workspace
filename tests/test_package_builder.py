@@ -154,3 +154,37 @@ def test_builder_reports_real_processing_progress(tmp_path: Path):
     assert events[-1].phase == "finalize"
     assert events[-1].processed == events[-1].total == 4
 
+
+def test_builder_isolates_latest_and_archives_old_builds_to_history(tmp_path: Path):
+    root = tmp_path / "publish"
+    paths, _, _ = init_workspace(root)
+    task_paths = TaskPaths.from_workspace(paths, "task-001")
+    TaskRepository.create(task_paths, title="test")
+    img_a = _image(tmp_path / "a.png", "red")
+    shutil.copy2(img_a, task_paths.selection_dirs["all"] / "0001_a.png")
+
+    builder = PackageBuilder()
+
+    # 第一次导出
+    result1 = builder.build(root, "task-001")
+    assert result1.build_root.name == "latest"
+    assert (task_paths.builds_root / "latest" / "output" / "all" / "0001_a.png").is_file()
+    assert not (task_paths.builds_root / "history").exists()
+
+    # 第二次重新导出
+    img_b = _image(tmp_path / "b.png", "blue")
+    shutil.copy2(img_b, task_paths.selection_dirs["all"] / "0002_b.png")
+    result2 = builder.build(root, "task-001")
+
+    assert result2.build_root.name == "latest"
+    assert (task_paths.builds_root / "latest" / "output" / "all" / "0002_b.png").is_file()
+
+    # 确认旧构建被隔离归档到 history/ 目录下
+    history_dir = task_paths.builds_root / "history"
+    assert history_dir.is_dir()
+    history_builds = list(history_dir.iterdir())
+    assert len(history_builds) == 1
+    assert history_builds[0].name == result1.build_id
+    assert (history_builds[0] / "selection_snapshot.json").is_file()
+
+

@@ -176,8 +176,25 @@ class SubmissionRepository:
 
         # 检查是否有历史 build
         last_export = None
-        if paths.builds_root.is_dir():
-            build_dirs = [d for d in paths.builds_root.iterdir() if d.is_dir()]
+        latest_dir = paths.builds_root / "latest"
+        if latest_dir.is_dir():
+            manifest_file = latest_dir / "build_manifest.json"
+            bid = "latest"
+            if manifest_file.is_file():
+                try:
+                    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    bid = data.get("build_id", "latest")
+                except Exception:
+                    pass
+            last_export = {
+                "build_id": bid,
+                "output_dir": str(latest_dir),
+                "exported_at": datetime.datetime.fromtimestamp(
+                    latest_dir.stat().st_mtime, datetime.timezone.utc
+                ).isoformat(),
+            }
+        elif paths.builds_root.is_dir():
+            build_dirs = [d for d in paths.builds_root.iterdir() if d.is_dir() and d.name != "history"]
             if build_dirs:
                 build_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
                 latest_build = build_dirs[0]

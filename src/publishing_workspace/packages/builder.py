@@ -55,10 +55,11 @@ class PackageBuilder:
         build_id = _build_id()
         builds_root = Path(output_root) if output_root is not None else task_paths.builds_root
         builds_root.mkdir(parents=True, exist_ok=True)
-        build_root = builds_root / build_id
+        latest_dir = builds_root / "latest"
+        history_dir = builds_root / "history"
         temporary = builds_root / f".{build_id}.tmp"
-        if build_root.exists() or temporary.exists():
-            raise ValueError(f"build 目录已存在：{build_id}")
+        if temporary.exists():
+            shutil.rmtree(temporary)
 
         selections = CurrentSelectionScanner().scan(
             task_paths,
@@ -167,7 +168,29 @@ class PackageBuilder:
                 manifest_path,
                 manifest.model_dump(mode="json", by_alias=True),
             )
-            os.replace(temporary, build_root)
+
+            # 如果已有 latest 导出，将旧导出包自动归档移动到 history/ 目录下
+            if latest_dir.exists():
+                history_dir.mkdir(parents=True, exist_ok=True)
+                old_manifest_file = latest_dir / "build_manifest.json"
+                old_id = None
+                if old_manifest_file.is_file():
+                    try:
+                        old_manifest_data = json.loads(old_manifest_file.read_text(encoding="utf-8"))
+                        old_id = old_manifest_data.get("build_id")
+                    except Exception:
+                        pass
+                if not old_id:
+                    old_mtime = datetime.fromtimestamp(latest_dir.stat().st_mtime, timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    old_id = f"build_{old_mtime}"
+
+                target_history = history_dir / old_id
+                if target_history.exists():
+                    target_history = history_dir / f"{old_id}_{uuid4().hex[:4]}"
+                shutil.move(str(latest_dir), str(target_history))
+
+            os.replace(temporary, latest_dir)
+            build_root = latest_dir
 
             if progress is not None:
                 progress(
