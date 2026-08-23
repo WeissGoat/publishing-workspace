@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260823-36">
+  <link rel="stylesheet" href="/library.css?v=20260824-38">
 </head>
 <body>
   <main class="app-shell">
@@ -283,6 +283,15 @@
                   <div id="recommend-pixiv-online-tags" class="recommend-chips-wrap"></div>
                 </div>
               </div>
+
+              <!-- Pixiv 发布操作栏 -->
+              <div class="pixiv-publish-box">
+                <div id="pixiv-publish-status-box" class="pixiv-publish-status-box hidden"></div>
+                <div class="pixiv-publish-btn-row">
+                  <button id="publish-to-pixiv-btn" class="primary-button pixiv-publish-btn" type="button">🚀 发布到 Pixiv</button>
+                  <button id="republish-to-pixiv-btn" class="secondary-button compact-button hidden" type="button" title="忽略已发布记录重新上传">🔄 重新发布</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -509,6 +518,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260824-37" defer></script>
+  <script src="/library.js?v=20260824-38" defer></script>
 </body>
 </html>

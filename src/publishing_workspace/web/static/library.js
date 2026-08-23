@@ -155,6 +155,9 @@
     recommendActionTags: document.getElementById("recommend-action-tags"),
     fetchPixivOnlineTagsBtn: document.getElementById("fetch-pixiv-online-tags-btn"),
     recommendPixivOnlineTags: document.getElementById("recommend-pixiv-online-tags"),
+    publishToPixivBtn: document.getElementById("publish-to-pixiv-btn"),
+    republishToPixivBtn: document.getElementById("republish-to-pixiv-btn"),
+    pixivPublishStatusBox: document.getElementById("pixiv-publish-status-box"),
 
     submissionTaskBadge: document.getElementById("submission-task-badge"),
     submissionRevBadge: document.getElementById("submission-rev-badge"),
@@ -1429,6 +1432,28 @@
     renderRecommendCategory(elements.recommendCharTags, state.tagSuggestions?.character || [], selectedTags);
     renderRecommendCategory(elements.recommendActionTags, state.tagSuggestions?.action || [], selectedTags);
     renderRecommendCategory(elements.recommendPixivOnlineTags, state.tagSuggestions?.pixiv || [], selectedTags);
+
+    // 渲染 Pixiv 发布状态与按钮
+    const sub = state.currentSubmission;
+    if (elements.pixivPublishStatusBox && elements.publishToPixivBtn) {
+      if (pix.illust_id) {
+        elements.pixivPublishStatusBox.classList.remove("hidden");
+        elements.pixivPublishStatusBox.className = "pixiv-publish-status-box published";
+        elements.pixivPublishStatusBox.innerHTML = `<span>✓ 已发布到 Pixiv：<a href="https://www.pixiv.net/artworks/${encodeURIComponent(pix.illust_id)}" target="_blank" class="pixiv-pid-link">PID: ${escapeHtml(pix.illust_id)} ↗</a></span><span class="helper-text" style="font-size:11px;">${pix.published_at ? escapeHtml(pix.published_at.slice(0, 19).replace("T", " ")) : ""}</span>`;
+        elements.publishToPixivBtn.textContent = `✓ 已发布 (PID: ${pix.illust_id})`;
+        elements.publishToPixivBtn.disabled = true;
+        if (elements.republishToPixivBtn) {
+          elements.republishToPixivBtn.classList.remove("hidden");
+        }
+      } else {
+        elements.pixivPublishStatusBox.classList.add("hidden");
+        elements.publishToPixivBtn.textContent = "🚀 发布到 Pixiv";
+        elements.publishToPixivBtn.disabled = !sub.task_id;
+        if (elements.republishToPixivBtn) {
+          elements.republishToPixivBtn.classList.add("hidden");
+        }
+      }
+    }
   }
 
   function renderRecommendCategory(container, list, selectedTags) {
@@ -2879,6 +2904,69 @@
         elements.syncPixivPastTagsBtn.textContent = "🔄 从Pixiv同步";
       }
     });
+  }
+
+  async function handlePublishToPixiv(forceRepublish = false) {
+    const sub = state.currentSubmission;
+    if (!sub || !sub.task_id) {
+      showNotice("请先保存投稿任务后再发布到 Pixiv", "warning");
+      return;
+    }
+
+    if (forceRepublish) {
+      if (!confirm("该投稿已在 Pixiv 发布过，确定要再次上传并创建为新作品吗？")) {
+        return;
+      }
+    }
+
+    if (elements.publishToPixivBtn) {
+      elements.publishToPixivBtn.disabled = true;
+      elements.publishToPixivBtn.textContent = "⏳ 正在上传图片并发布中...";
+    }
+    if (elements.republishToPixivBtn) {
+      elements.republishToPixivBtn.disabled = true;
+    }
+
+    try {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(sub.task_id)}/publish/pixiv`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          force_rebuild: false,
+          force_republish: forceRepublish,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.detail || {};
+        const msg = detail.message || (typeof data.detail === "string" ? data.detail : "发布到 Pixiv 失败");
+        throw new Error(msg);
+      }
+
+      if (sub.pixiv) {
+        sub.pixiv.illust_id = data.illust_id;
+        sub.pixiv.published_at = data.published_at;
+        sub.pixiv.last_publish_status = "success";
+      }
+
+      renderPixivMetadataUI();
+      showNotice(`🎉 ${data.message || "发布成功！"}`, "info");
+    } catch (err) {
+      showNotice(`发布到 Pixiv 失败: ${err.message}`, "error");
+      renderPixivMetadataUI();
+    } finally {
+      if (elements.republishToPixivBtn) {
+        elements.republishToPixivBtn.disabled = false;
+      }
+    }
+  }
+
+  if (elements.publishToPixivBtn) {
+    elements.publishToPixivBtn.addEventListener("click", () => handlePublishToPixiv(false));
+  }
+  if (elements.republishToPixivBtn) {
+    elements.republishToPixivBtn.addEventListener("click", () => handlePublishToPixiv(true));
   }
 
   elements.newSubmissionBtn.addEventListener("click", () => {

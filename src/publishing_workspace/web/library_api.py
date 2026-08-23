@@ -21,7 +21,13 @@ from ..submissions.pixiv_metadata import (
     suggest_tags_from_assets,
     suggest_tags_from_pixiv_sync,
 )
+from ..submissions.pixiv_uploader import PixivUploadService
 from ..submissions.service import SubmissionService
+
+
+class PixivPublishRequest(BaseModel):
+    force_rebuild: bool = False
+    force_republish: bool = False
 
 
 class SubmissionMutation(BaseModel):
@@ -375,6 +381,49 @@ def register_library_routes(app: FastAPI) -> None:
                 status_code=500,
                 content={"detail": {"code": "submission_delete_failed", "message": str(exc)}},
             )
+
+    @app.post("/api/submissions/{task_id}/publish/pixiv")
+    def publish_submission_to_pixiv(
+        task_id: str,
+        payload: PixivPublishRequest | None = None,
+    ):
+        req_payload = payload or PixivPublishRequest()
+        uploader = PixivUploadService()
+        result = uploader.publish_task(
+            app.state.publishing_root,
+            task_id,
+            force_rebuild=req_payload.force_rebuild,
+            force_republish=req_payload.force_republish,
+        )
+        if not result.success:
+            status_code = 400
+            if result.error_code == "already_published":
+                status_code = 409
+            elif result.error_code == "task_not_found":
+                status_code = 404
+            elif result.error_code == "cookie_missing":
+                status_code = 400
+            elif result.error_code == "captcha_required":
+                status_code = 429
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "detail": {
+                        "code": result.error_code,
+                        "message": result.error,
+                        "illust_id": result.illust_id,
+                        "pixiv_url": result.pixiv_url,
+                    }
+                },
+            )
+        return {
+            "success": True,
+            "task_id": result.task_id,
+            "illust_id": result.illust_id,
+            "pixiv_url": result.pixiv_url,
+            "published_at": result.published_at,
+            "message": f"发布成功！作品 PID: {result.illust_id}",
+        }
 
     # 导出作业相关路由
     @app.post("/api/submissions/{task_id}/exports")

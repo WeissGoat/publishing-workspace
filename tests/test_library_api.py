@@ -348,3 +348,25 @@ def test_submission_with_pixiv_metadata(tmp_path: Path):
     assert get_data["pixiv"]["tags"] == ["AIイラスト", "暁美ほむら"]
 
 
+def test_publish_to_pixiv_endpoint_missing_cookie(tmp_path: Path):
+    client, import_id, asset_ids = client_with_catalog(tmp_path)
+
+    create_resp = client.post(
+        "/api/submissions",
+        json={
+            "title": "待发布投稿",
+            "source_import_id": import_id,
+            "sets": {"all": [asset_ids[0]]},
+            "pixiv": {"title": "待发布投稿", "tags": ["AIイラスト"]},
+        },
+    )
+    assert create_resp.status_code == 200
+    task_id = create_resp.json()["task_id"]
+
+    # 未配置 cookie 时调用 publish 接口
+    pub_resp = client.post(f"/api/submissions/{task_id}/publish/pixiv", json={})
+    assert pub_resp.status_code == 400
+    assert pub_resp.json()["detail"]["code"] == "cookie_missing"
+
+
+

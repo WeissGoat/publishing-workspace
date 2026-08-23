@@ -22,7 +22,7 @@ class SubmissionRevisionConflictError(RuntimeError):
 
 
 class PixivMetadata(BaseModel):
-    """Pixiv 投稿元数据配置。"""
+    """Pixiv 投稿元数据配置与发布状态。"""
 
     title: str = ""
     caption: str = ""
@@ -30,6 +30,13 @@ class PixivMetadata(BaseModel):
     suggested_tags: list[str] = Field(default_factory=list)
     r18: bool = True
     allow_tag_edit: bool = True
+    ai_type: bool = True
+
+    # ── 发布状态跟踪 ──
+    illust_id: str | None = None
+    published_at: str | None = None
+    last_publish_status: str | None = None
+    last_publish_error: str | None = None
 
 
 class Submission(BaseModel):
