@@ -1582,37 +1582,11 @@
     }
   }
 
-  function switchLightboxMode(mode) {
-    state.lightbox.mode = mode;
-    if (elements.lightboxModeTabs) {
-      elements.lightboxModeTabs.querySelectorAll("[data-lb-tab]").forEach((btn) => {
-        btn.classList.toggle("active", btn.dataset.lbTab === mode);
-      });
+  function getOrCreatePainterro() {
+    if (state.lightbox.painterro) {
+      return state.lightbox.painterro;
     }
-
-    if (mode === "edit") {
-      if (elements.lightboxContainer) elements.lightboxContainer.classList.add("mode-edit");
-      if (elements.lightboxImageArea) elements.lightboxImageArea.classList.add("hidden");
-      if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.remove("hidden");
-      initPainterroForCurrentExportImage();
-    } else {
-      if (elements.lightboxContainer) elements.lightboxContainer.classList.remove("mode-edit");
-      if (elements.lightboxImageArea) elements.lightboxImageArea.classList.remove("hidden");
-      if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.add("hidden");
-    }
-  }
-
-  function initPainterroForCurrentExportImage() {
-    if (!window.Painterro) {
-      showNotice("图片编辑器 (Painterro) 正在加载中，请稍候...", "warning");
-      return;
-    }
-    const item = state.lightbox.exportItem;
-    if (!item) return;
-
-    if (elements.painterroContainer) {
-      elements.painterroContainer.innerHTML = "";
-    }
+    if (!window.Painterro) return null;
 
     try {
       const ptr = window.Painterro({
@@ -1622,14 +1596,19 @@
         defaultTool: "pixelize",
         availableTools: ["crop", "pixelize", "brush", "rect", "eraser", "undo", "redo", "save", "open", "zoomin", "zoomout", "settings"],
         saveHandler: async (image, done) => {
+          const item = state.lightbox.exportItem;
+          if (!item) {
+            done(false);
+            return;
+          }
           try {
+            showNotice("正在保存手动打码修改...", "info");
             const dataUrl = image.asDataURL("image/png");
             const blob = await fetch(dataUrl).then((r) => r.blob());
             const taskId = state.currentSubmission.task_id;
             const tabName = state.lightbox.exportTabName;
             const filename = item.filename;
 
-            showNotice("正在保存手动打码修改...", "info");
             const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(tabName)}/${encodeURIComponent(filename)}`, {
               method: "PUT",
               headers: { "Content-Type": "image/png" },
@@ -1661,19 +1640,38 @@
       });
 
       state.lightbox.painterro = ptr;
-      // 使用 Blob ObjectURL 保证图片即刻绘制在画布上
-      fetch(item.preview_url)
-        .then((res) => res.blob())
-        .then((blob) => {
-          const objectUrl = URL.createObjectURL(blob);
-          ptr.show(objectUrl);
-        })
-        .catch(() => {
-          ptr.show(item.preview_url);
-        });
+      return ptr;
     } catch (e) {
       console.error("Painterro 初始化异常", e);
       showNotice(`初始化图片编辑器失败：${e.message}`, "error");
+      return null;
+    }
+  }
+
+  function switchLightboxMode(mode) {
+    state.lightbox.mode = mode;
+    if (elements.lightboxModeTabs) {
+      elements.lightboxModeTabs.querySelectorAll("[data-lb-tab]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.lbTab === mode);
+      });
+    }
+
+    if (mode === "edit") {
+      if (elements.lightboxContainer) elements.lightboxContainer.classList.add("mode-edit");
+      if (elements.lightboxImageArea) elements.lightboxImageArea.classList.add("hidden");
+      if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.remove("hidden");
+
+      const item = state.lightbox.exportItem;
+      if (item) {
+        const ptr = getOrCreatePainterro();
+        if (ptr) {
+          ptr.show(item.preview_url);
+        }
+      }
+    } else {
+      if (elements.lightboxContainer) elements.lightboxContainer.classList.remove("mode-edit");
+      if (elements.lightboxImageArea) elements.lightboxImageArea.classList.remove("hidden");
+      if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.add("hidden");
     }
   }
 
@@ -2109,6 +2107,12 @@
   if (elements.closePreview) {
     elements.closePreview.addEventListener("click", () => {
       elements.previewDialog.close();
+    });
+  }
+
+  if (elements.previewDialog) {
+    elements.previewDialog.addEventListener("close", () => {
+      switchLightboxMode("view");
     });
   }
 
