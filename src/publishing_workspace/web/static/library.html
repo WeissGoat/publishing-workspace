@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260823-20">
+  <link rel="stylesheet" href="/library.css?v=20260823-21">
 </head>
 <body>
   <main class="app-shell">
@@ -242,15 +242,17 @@
           <div id="set-items-container" class="set-items-container"></div>
 
           <div class="submission-form-actions">
-            <button id="save-submission-btn" class="primary-button" type="submit">保存投稿 (生成 Task)</button>
+            <button id="save-submission-btn" class="primary-button" type="submit">💾 保存投稿 (生成 Task)</button>
           </div>
         </form>
 
-        <!-- 导出发布包区域 -->
-        <div id="export-section" class="export-section">
-          <div class="export-heading">
-            <strong>导出发布包</strong>
-            <button id="start-export-btn" class="primary-button compact-button" type="button" disabled>开始导出</button>
+        <!-- 导出发布包独立卡片区域 -->
+        <div id="export-section" class="export-section-card">
+          <div class="export-card-header">
+            <div class="export-title-group">
+              <strong class="export-title-text">🚀 导出发布包</strong>
+            </div>
+            <button id="start-export-btn" class="primary-button export-action-btn" type="button" disabled>开始导出</button>
           </div>
 
           <div class="export-options-bar">
@@ -291,13 +293,13 @@
               </div>
             </div>
 
-            <!-- 🖼️ 发布包成品图集直接查看 -->
+            <!-- 🖼️ 发布包成品图集直接查看（顺序与上方一致：all -> post -> cover） -->
             <div class="exported-gallery-section">
               <div class="exported-gallery-header">
                 <strong class="exported-gallery-title">🖼️ 发布包成品图集</strong>
                 <div id="export-tabs-container" class="segmented-control compact-segments">
-                  <button type="button" class="segment-btn active" data-export-tab="post">正文 post (0)</button>
-                  <button type="button" class="segment-btn" data-export-tab="all">全集 all (0)</button>
+                  <button type="button" class="segment-btn active" data-export-tab="all">全集 all (0)</button>
+                  <button type="button" class="segment-btn" data-export-tab="post">正文 post (0)</button>
                   <button type="button" class="segment-btn" data-export-tab="cover">封面 cover (0)</button>
                 </div>
               </div>
@@ -421,6 +423,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260823-20" defer></script>
+  <script src="/library.js?v=20260823-21" defer></script>
 </body>
 </html>

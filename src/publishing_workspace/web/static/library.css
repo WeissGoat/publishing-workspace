@@ -734,29 +734,76 @@ input[type="search"]::-webkit-search-results-decoration {
   border-color: #fca5a5;
 }
 
-.submission-form-actions { margin-top: 14px; }
-.submission-form-actions button { width: 100%; }
+.submission-form-actions {
+  margin-top: 16px;
+  margin-bottom: 20px;
+}
+.submission-form-actions button {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+}
 
-/* 导出模块 */
-.export-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+/* 导出发布包独立卡片 */
+.export-section-card {
+  margin-top: 20px;
+  padding: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.export-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.export-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-title-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.export-action-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+}
+
 .export-options-bar {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 8px 12px;
 }
+
 .mosaic-checkbox-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
   font-weight: 500;
   color: #1e293b;
   cursor: pointer;
   user-select: none;
 }
+
 .mosaic-checkbox-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
   accent-color: #2563eb;
   cursor: pointer;
 }

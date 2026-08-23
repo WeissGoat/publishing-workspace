@@ -1524,10 +1524,10 @@
     }
   }
 
-  function renderExportedThumbsGrid() {
+    function renderExportedThumbsGrid() {
     if (!elements.exportedThumbsGrid || !state.latestBuildData) return;
     elements.exportedThumbsGrid.innerHTML = "";
-    const tab = state.currentExportTab || "post";
+    const tab = state.currentExportTab || "all";
     const imgList = state.latestBuildData.images?.[tab] || [];
 
     if (!imgList.length) {
