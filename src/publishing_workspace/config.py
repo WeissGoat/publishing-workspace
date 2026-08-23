@@ -135,6 +135,17 @@ class IntegrationsConfig(BaseModel):
     mosaic: MosaicIntegrationConfig = Field(default_factory=MosaicIntegrationConfig)
 
 
+class PixivAutoConfig(BaseModel):
+    caption_prefix: str = ""
+    default_tags: list[str] = Field(
+        default_factory=lambda: ["AIイラスト", "NovelAI"]
+    )
+    r18: bool = True
+    allow_tag_edit: bool = True
+    pixiv_cookie: str = ""
+    pixiv_token: str = ""
+
+
 class PublishingWorkspaceConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -145,6 +156,7 @@ class PublishingWorkspaceConfig(BaseModel):
     classification: ClassificationConfig = Field(default_factory=ClassificationConfig)
     exporters: ExportersConfig = Field(default_factory=ExportersConfig)
     integrations: IntegrationsConfig = Field(default_factory=IntegrationsConfig)
+    pixiv: PixivAutoConfig = Field(default_factory=PixivAutoConfig)
     image_extensions: list[str] = Field(
         default_factory=lambda: [".png", ".jpg", ".jpeg", ".webp"]
     )

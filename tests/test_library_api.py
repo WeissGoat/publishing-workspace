@@ -120,8 +120,8 @@ def test_create_submission_returns_task_and_filled_sets(tmp_path: Path):
     assert body["task_id"]
     assert body["title"] == "API 投稿"
     assert body["sets"]["all"] == [asset_ids[0]]
-    assert body["sets"]["post"] == [asset_ids[0]]
-    assert body["sets"]["cover"] == [asset_ids[0]]
+    assert body["sets"]["post"] == []
+    assert body["sets"]["cover"] == []
     assert (tmp_path / "tasks" / body["task_id"] / "submission.yaml").is_file()
 
 
@@ -262,4 +262,89 @@ def test_update_build_image_endpoint(tmp_path: Path):
         content=b"not an image",
     )
     assert bad_img.status_code == 400
+
+
+def test_delete_submission_endpoint(tmp_path: Path):
+    client, import_id, asset_ids = client_with_catalog(tmp_path)
+
+    # 1. 创建投稿
+    create_resp = client.post(
+        "/api/submissions",
+        json={
+            "title": "待删除投稿",
+            "source_import_id": import_id,
+            "sets": {"all": [asset_ids[0]]},
+        },
+    )
+    assert create_resp.status_code == 200
+    task_id = create_resp.json()["task_id"]
+
+    # 2. 删除投稿
+    del_resp = client.delete(f"/api/submissions/{task_id}")
+    assert del_resp.status_code == 200
+    assert del_resp.json()["success"] is True
+    assert del_resp.json()["deleted_task_id"] == task_id
+    assert asset_ids[0] in del_resp.json()["unmarked_asset_ids"]
+
+    # 3. 再次获取应为 404
+    get_resp = client.get(f"/api/submissions/{task_id}")
+    assert get_resp.status_code == 404
+
+
+def test_generate_submission_metadata(tmp_path: Path):
+    client, import_id, asset_ids = client_with_catalog(tmp_path)
+
+    resp = client.post(
+        "/api/submissions/generate-metadata",
+        json={
+            "asset_ids": asset_ids,
+            "import_id": import_id,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "title" in data
+    assert "caption" in data
+    assert "tag_suggestions" in data
+    assert "preset" in data["tag_suggestions"]
+    assert "character" in data["tag_suggestions"]
+    assert "action" in data["tag_suggestions"]
+    assert data["r18"] is True
+    assert data["allow_tag_edit"] is True
+
+
+def test_submission_with_pixiv_metadata(tmp_path: Path):
+    client, import_id, asset_ids = client_with_catalog(tmp_path)
+
+    pixiv_payload = {
+        "title": "暁美ほむら / akemi homura",
+        "caption": "Hi there!",
+        "tags": ["AIイラスト", "暁美ほむら"],
+        "r18": True,
+        "allow_tag_edit": True,
+    }
+
+    create_resp = client.post(
+        "/api/submissions",
+        json={
+            "title": "带 Pixiv 元数据投稿",
+            "source_import_id": import_id,
+            "sets": {"all": [asset_ids[0]]},
+            "pixiv": pixiv_payload,
+        },
+    )
+    assert create_resp.status_code == 200
+    res_data = create_resp.json()
+    assert res_data["pixiv"] is not None
+    assert res_data["pixiv"]["title"] == "暁美ほむら / akemi homura"
+    assert res_data["pixiv"]["tags"] == ["AIイラスト", "暁美ほむら"]
+
+    task_id = res_data["task_id"]
+    get_resp = client.get(f"/api/submissions/{task_id}")
+    assert get_resp.status_code == 200
+    get_data = get_resp.json()
+    assert get_data["pixiv"] is not None
+    assert get_data["pixiv"]["title"] == "暁美ほむら / akemi homura"
+    assert get_data["pixiv"]["tags"] == ["AIイラスト", "暁美ほむら"]
+
 

@@ -6,3 +6,5 @@ __pycache__/
 htmlcov/
 .superpowers/
 examples/workspace/workspace/backups/
+models/
+tmp/

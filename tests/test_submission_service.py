@@ -90,8 +90,8 @@ def test_submission_service_create_and_update(tmp_path: Path):
     assert created.task_id.startswith("submission-")
     assert created.revision == 1
     assert created.sets["all"] == asset_ids[:2]
-    assert created.sets["post"] == asset_ids[:2]
-    assert created.sets["cover"] == [asset_ids[0]]
+    assert created.sets["post"] == []
+    assert created.sets["cover"] == []
 
     task_paths = TaskPaths.from_workspace(init_workspace(root)[0], created.task_id)
     assert task_paths.task_yaml.is_file()
@@ -99,8 +99,8 @@ def test_submission_service_create_and_update(tmp_path: Path):
     assert task_paths.candidates_snapshot.is_file()
     assert task_paths.candidates_playlist.is_file()
     assert (task_paths.selection_dirs["all"] / "0001_a.png").is_file()
-    assert (task_paths.selection_dirs["post"] / "0001_a.png").is_file()
-    assert (task_paths.selection_dirs["cover"] / "0001_a.png").is_file()
+    assert len(list(task_paths.selection_dirs["post"].glob("*"))) == 0
+    assert len(list(task_paths.selection_dirs["cover"].glob("*"))) == 0
 
     # 2. 更新投稿
     updated = service.create_or_update(
@@ -264,3 +264,75 @@ def test_submission_service_full_rollback_on_failure(tmp_path: Path):
     assert (task_paths.builds_root / "build-test" / "marker.txt").read_text() == "keep this build"
     assert (task_paths.history_dir / "hist-keep.json").read_text() == '{"keep": true}'
     assert (task_paths.selection_dirs["all"] / "0001_a.png").is_file()
+
+
+def test_submission_service_delete_and_unmark(tmp_path: Path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from publishing_workspace.plans.models import ScheduleEntry, TaskContent
+    from publishing_workspace.plans.paths import PlanPaths
+    from publishing_workspace.plans.repository import PlanRepository
+
+    root, import_id, asset_ids = _seed_workspace_with_catalog(tmp_path)
+    paths, _, _ = init_workspace(root)
+    catalog_repo = CatalogRepository(paths.catalog)
+    service = SubmissionService()
+
+    # 预先给 a, b 打上 posted 标记
+    aid_a, aid_b, aid_c = asset_ids[0], asset_ids[1], asset_ids[2]
+    catalog_repo.set_asset_marks([aid_a, aid_b], mark="posted")
+
+    # 1. 创建投稿 1（包含 a, b）
+    sub1 = service.create_or_update(
+        root,
+        task_id=None,
+        title="投稿 1",
+        source_import_id=import_id,
+        sets={"all": [aid_a, aid_b]},
+    )
+
+    # 2. 创建投稿 2（包含 b, c）
+    sub2 = service.create_or_update(
+        root,
+        task_id=None,
+        title="投稿 2",
+        source_import_id=import_id,
+        sets={"all": [aid_b, aid_c]},
+    )
+
+    # 3. 在月度计划 2026-08 中排期投稿 1
+    plan_repo = PlanRepository()
+    plan_paths = PlanPaths.from_workspace(paths, "2026-08")
+    plan = plan_repo.create(plan_paths)
+    plan.entries.append(
+        ScheduleEntry(
+            entry_id="entry-sub1",
+            scheduled_at=datetime(2026, 8, 10, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+            title="排期投稿 1",
+            content=TaskContent(kind="task", task_id=sub1.task_id),
+        )
+    )
+    plan_repo.save(plan_paths, plan)
+
+    # 4. 删除投稿 1
+    res = service.delete(root, sub1.task_id)
+    assert res["deleted_task_id"] == sub1.task_id
+    assert aid_a in res["unmarked_asset_ids"]
+    assert aid_b not in res["unmarked_asset_ids"]  # b 还在投稿 2 中，不应该被取消标记
+
+    # 5. 验证 Catalog 标记状态
+    marks = catalog_repo.all_asset_marks()
+    assert "posted" not in marks.get(aid_a, [])
+    assert "posted" in marks.get(aid_b, [])
+
+    # 6. 验证月度计划中对投稿 1 的引用已被自动移除
+    updated_plan = plan_repo.load(plan_paths)
+    assert len(updated_plan.entries) == 0
+
+    # 7. 删除投稿 2
+    res2 = service.delete(root, sub2.task_id)
+    assert res2["deleted_task_id"] == sub2.task_id
+    assert aid_b in res2["unmarked_asset_ids"]  # 此时 b 不在任何投稿中了，应该被取消标记
+
+    marks_final = catalog_repo.all_asset_marks()
+    assert "posted" not in marks_final.get(aid_b, [])

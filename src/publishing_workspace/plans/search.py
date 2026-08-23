@@ -205,6 +205,16 @@ _TASK_USAGE_CACHE: dict[tuple[str, tuple], dict[str, list[str]]] = {}
 _WORKSPACE_USAGE_CACHE: dict[tuple[str, int, tuple, tuple], dict[str, list[str]]] = {}
 
 
+def clear_search_caches() -> None:
+    """清除内存中的检索、使用索引与候选节点缓存。"""
+    _SEARCH_ENTRIES_CACHE.clear()
+    _TASK_USAGE_CACHE.clear()
+    _WORKSPACE_USAGE_CACHE.clear()
+    _NODE_CANDIDATES_CACHE.clear()
+    _GLOBAL_DIR_CLASSIFY_CACHE.clear()
+    _GLOBAL_CLASSIFY_YAML_CACHE.clear()
+
+
 class AssetSearchService:
     def __init__(self, *, facet_reader: ClassifyFacetReader | None = None):
         self.facet_reader = facet_reader or ClassifyFacetReader()

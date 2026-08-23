@@ -7,6 +7,16 @@
     submissions: [],
     selectedEntryId: null,
     draggedEntryId: null,
+    currentDetail: null,
+    currentDetailTab: "all",
+    currentBuildTab: "all",
+    taskDetailsCache: new Map(),
+    lightbox: {
+      items: [],
+      index: 0,
+      setName: "all",
+      isBuild: false,
+    },
   };
 
   const elements = {
@@ -33,16 +43,76 @@
     gotoLibraryLink: document.getElementById("goto-library-link"),
     saveEntryBtn: document.getElementById("save-entry"),
     deleteEntryBtn: document.getElementById("delete-entry"),
+
+    // 投稿详情卡片
+    detailCard: document.getElementById("submission-detail-card"),
+    detailTitle: document.getElementById("detail-task-title"),
+    detailTaskId: document.getElementById("detail-task-id"),
+    detailExportStatus: document.getElementById("detail-export-status"),
+    detailOpenLibraryBtn: document.getElementById("detail-open-library-btn"),
+    detailDeleteSubmissionBtn: document.getElementById("detail-delete-submission-btn"),
+    detailCountAll: document.getElementById("detail-count-all"),
+    detailCountPost: document.getElementById("detail-count-post"),
+    detailCountCover: document.getElementById("detail-count-cover"),
+    detailThumbsContainer: document.getElementById("detail-thumbs-container"),
+
+    // 导出成品区域
+    detailBuildSection: document.getElementById("detail-build-section"),
+    detailBuildTime: document.getElementById("detail-build-time"),
+    detailNoBuildBox: document.getElementById("detail-no-build-box"),
+    detailBuildCountAll: document.getElementById("detail-build-count-all"),
+    detailBuildCountPost: document.getElementById("detail-build-count-post"),
+    detailBuildCountCover: document.getElementById("detail-build-count-cover"),
+    detailBuildThumbsContainer: document.getElementById("detail-build-thumbs-container"),
+    detailExportDownloads: document.getElementById("detail-export-downloads"),
+    detailOpenBuildDirBtn: document.getElementById("detail-open-build-dir-btn"),
+
+    // Lightbox Modal
+    previewDialog: document.getElementById("preview-dialog"),
+    previewImage: document.getElementById("preview-image"),
+    lightboxCounter: document.getElementById("lightbox-counter"),
+    lightboxCaption: document.getElementById("lightbox-caption"),
+    lightboxRevealBtn: document.getElementById("lightbox-reveal-btn"),
+    lightboxPrev: document.getElementById("lightbox-prev"),
+    lightboxNext: document.getElementById("lightbox-next"),
+    closePreview: document.getElementById("close-preview"),
   };
 
+  let noticeTimer = null;
   function showNotice(message, type = "info") {
-    elements.notice.textContent = message;
-    elements.notice.className = `notice ${type}`;
+    clearTimeout(noticeTimer);
+    let noticeEl = elements.notice;
+    if (elements.previewDialog && elements.previewDialog.open) {
+      let dlgNotice = elements.previewDialog.querySelector(".dialog-toast");
+      if (!dlgNotice) {
+        dlgNotice = document.createElement("div");
+        dlgNotice.className = "notice dialog-toast";
+        elements.previewDialog.appendChild(dlgNotice);
+      }
+      noticeEl = dlgNotice;
+    }
+    if (noticeEl) {
+      noticeEl.textContent = message;
+      noticeEl.className = `notice ${type} dialog-toast`;
+    }
+    noticeTimer = setTimeout(() => {
+      clearNotice();
+    }, 3500);
   }
 
   function clearNotice() {
-    elements.notice.textContent = "";
-    elements.notice.className = "notice";
+    clearTimeout(noticeTimer);
+    if (elements.notice) {
+      elements.notice.textContent = "";
+      elements.notice.className = "notice";
+    }
+    if (elements.previewDialog) {
+      const dlgNotice = elements.previewDialog.querySelector(".dialog-toast");
+      if (dlgNotice) {
+        dlgNotice.textContent = "";
+        dlgNotice.className = "notice dialog-toast";
+      }
+    }
   }
 
   function getQueryMonth() {
@@ -78,6 +148,7 @@
       if (res.ok) {
         state.submissions = await res.json();
         updateTaskOptions();
+        renderCalendarGrid();
       }
     } catch (err) {
       console.warn("加载投稿列表失败", err);
@@ -90,7 +161,7 @@
     for (const sub of state.submissions) {
       const opt = document.createElement("option");
       opt.value = sub.task_id;
-      const count = sub.counts && typeof sub.counts.post === "number" ? ` (${sub.counts.post}图)` : "";
+      const count = sub.counts && typeof sub.counts.all === "number" ? ` (${sub.counts.all}图)` : "";
       opt.textContent = `${sub.title || sub.task_id}${count}`;
       elements.taskSelect.appendChild(opt);
     }
@@ -214,6 +285,17 @@
 
     let badgeText = isTask ? "task" : "散图";
     let badgeClass = isInline ? "entry-badge legacy" : "entry-badge";
+    let countText = "";
+
+    if (isTask) {
+      const sub = state.submissions.find((s) => s.task_id === entry.content.task_id);
+      if (sub && sub.counts) {
+        countText = `${sub.counts.all || sub.counts.post || 0}图`;
+      }
+    } else if (isInline && entry.content.sets) {
+      const allLen = (entry.content.sets.all || entry.content.sets.post || []).length;
+      countText = `${allLen}图`;
+    }
 
     let timeStr = "";
     if (entry.scheduled_at) {
@@ -222,10 +304,13 @@
     }
 
     card.innerHTML = `
-      <div class="entry-card-title">${escapeHtml(entry.title)}</div>
-      <div class="entry-card-meta">
-        <span class="entry-card-time">${timeStr}</span>
-        <span class="${badgeClass}">${badgeText}</span>
+      <div class="entry-card-info">
+        <div class="entry-card-title">${escapeHtml(entry.title)}</div>
+        <div class="entry-card-meta">
+          <span class="entry-card-time">${timeStr}</span>
+          <span class="${badgeClass}">${badgeText}</span>
+          ${countText ? `<span class="entry-count-tag">${countText}</span>` : ""}
+        </div>
       </div>
     `;
 
@@ -303,15 +388,18 @@
       elements.legacyNotice.classList.add("hidden");
       elements.taskLinkBox.classList.remove("hidden");
       elements.gotoLibraryLink.href = `/library?submission_id=${encodeURIComponent(entry.content.task_id)}`;
+      loadAndDisplayTaskDetail(entry.content.task_id, entry.title);
     } else if (isInline) {
       elements.taskSelect.value = "";
       elements.legacyNotice.classList.remove("hidden");
       elements.convertLegacyLink.href = `/library?plan_id=${encodeURIComponent(state.month)}&entry_id=${encodeURIComponent(entry.entry_id)}`;
       elements.taskLinkBox.classList.add("hidden");
+      displayInlineDetail(entry);
     } else {
       elements.taskSelect.value = "";
       elements.legacyNotice.classList.add("hidden");
       elements.taskLinkBox.classList.add("hidden");
+      hideTaskDetail();
     }
 
     elements.saveEntryBtn.disabled = state.plan.status === "locked";
@@ -337,8 +425,363 @@
     elements.taskLinkBox.classList.add("hidden");
     elements.saveEntryBtn.disabled = !state.plan || state.plan.status === "locked";
     elements.deleteEntryBtn.disabled = true;
+    hideTaskDetail();
     renderCalendarGrid();
   }
+
+  // =========================================================================
+  // 🎨 投稿详情卡片与导出成品模块 (all -> post -> cover)
+  // =========================================================================
+
+  function hideTaskDetail() {
+    state.currentDetail = null;
+    if (elements.detailCard) {
+      elements.detailCard.classList.add("hidden");
+    }
+  }
+
+  async function loadAndDisplayTaskDetail(taskId, fallbackTitle = "") {
+    if (!taskId) {
+      hideTaskDetail();
+      return;
+    }
+
+    elements.detailCard.classList.remove("hidden");
+    elements.detailTitle.textContent = fallbackTitle || taskId;
+    elements.detailTaskId.textContent = taskId;
+    elements.detailOpenLibraryBtn.href = `/library?submission_id=${encodeURIComponent(taskId)}`;
+    elements.detailThumbsContainer.innerHTML = '<div class="detail-thumbs-empty">正在加载投稿详情与选集图片...</div>';
+
+    try {
+      let subData = state.taskDetailsCache.get(taskId);
+      if (!subData) {
+        const [subRes, buildRes] = await Promise.all([
+          fetch(`/api/submissions/${encodeURIComponent(taskId)}`),
+          fetch(`/api/submissions/${encodeURIComponent(taskId)}/latest-build`).catch(() => null),
+        ]);
+        if (!subRes.ok) throw new Error(`无法读取投稿任务 (${subRes.status})`);
+        const sub = await subRes.json();
+        const build = buildRes && buildRes.ok ? await buildRes.json() : null;
+        subData = { ...sub, latestBuild: build };
+        state.taskDetailsCache.set(taskId, subData);
+      }
+
+      state.currentDetail = subData;
+      renderDetailCard(subData);
+    } catch (err) {
+      console.warn("加载投稿详情失败", err);
+      elements.detailThumbsContainer.innerHTML = `<div class="detail-thumbs-empty">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function displayInlineDetail(entry) {
+    elements.detailCard.classList.remove("hidden");
+    elements.detailTitle.textContent = entry.title || "旧格式散图投稿";
+    elements.detailTaskId.textContent = `entry: ${entry.entry_id}`;
+    elements.detailExportStatus.textContent = "散图排期";
+    elements.detailExportStatus.className = "detail-status-tag";
+    elements.detailOpenLibraryBtn.href = `/library?plan_id=${encodeURIComponent(state.month)}&entry_id=${encodeURIComponent(entry.entry_id)}`;
+
+    const sets = entry.content?.sets || { all: [], post: [], cover: [] };
+    state.currentDetail = {
+      isInline: true,
+      title: entry.title,
+      sets: sets,
+      latestBuild: null,
+    };
+    renderDetailCard(state.currentDetail);
+  }
+
+  function renderDetailCard(detail) {
+    if (!detail) return;
+
+    elements.detailTitle.textContent = detail.title || detail.task_id || "投稿任务";
+    elements.detailTaskId.textContent = detail.task_id || "inline_selection";
+
+    if (elements.detailDeleteSubmissionBtn) {
+      elements.detailDeleteSubmissionBtn.classList.toggle("hidden", !!detail.isInline);
+    }
+
+    // 1. 选集素材数量 (all -> post -> cover)
+    const sets = detail.sets || { all: [], post: [], cover: [] };
+    elements.detailCountAll.textContent = String(sets.all?.length || 0);
+    elements.detailCountPost.textContent = String(sets.post?.length || 0);
+    elements.detailCountCover.textContent = String(sets.cover?.length || 0);
+
+    // 渲染选集图片缩略图
+    renderDetailThumbsGrid();
+
+    // 2. 导出成品处理
+    const build = detail.latestBuild;
+    if (build && build.has_build) {
+      elements.detailExportStatus.textContent = `✅ 已导出构建 (${build.build_id || "latest"})`;
+      elements.detailExportStatus.className = "detail-status-tag success";
+
+      elements.detailBuildSection.classList.remove("hidden");
+      elements.detailNoBuildBox.classList.add("hidden");
+
+      if (build.exported_at) {
+        elements.detailBuildTime.textContent = `导出于 ${build.exported_at.slice(0, 19).replace("T", " ")}`;
+      } else {
+        elements.detailBuildTime.textContent = "";
+      }
+
+      // 导出选集图片数量
+      const buildImgs = build.images || { all: [], post: [], cover: [] };
+      elements.detailBuildCountAll.textContent = String(buildImgs.all?.length || 0);
+      elements.detailBuildCountPost.textContent = String(buildImgs.post?.length || 0);
+      elements.detailBuildCountCover.textContent = String(buildImgs.cover?.length || 0);
+
+      // 渲染导出成品缩略图
+      renderDetailBuildThumbsGrid();
+
+      // 导出压缩包下载
+      elements.detailExportDownloads.innerHTML = "";
+      const archives = build.archives || [];
+      if (archives.length) {
+        elements.detailExportDownloads.classList.remove("hidden");
+        for (const arch of archives) {
+          const mb = (arch.size_bytes / (1024 * 1024)).toFixed(2);
+          const link = document.createElement("a");
+          link.className = "detail-download-item";
+          link.href = arch.download_url;
+          link.download = arch.filename;
+          link.innerHTML = `<span>📦 下载 ${escapeHtml(arch.filename)}</span><span>${mb} MB</span>`;
+          elements.detailExportDownloads.appendChild(link);
+        }
+      } else {
+        elements.detailExportDownloads.classList.add("hidden");
+      }
+    } else {
+      elements.detailExportStatus.textContent = detail.isInline ? "未转换" : "未导出";
+      elements.detailExportStatus.className = "detail-status-tag";
+
+      elements.detailBuildSection.classList.add("hidden");
+      elements.detailNoBuildBox.classList.remove("hidden");
+    }
+  }
+
+  function renderDetailThumbsGrid() {
+    if (!state.currentDetail || !elements.detailThumbsContainer) return;
+
+    const tab = state.currentDetailTab || "all";
+    const sets = state.currentDetail.sets || {};
+    const assetList = sets[tab] || [];
+
+    // 更新 Tab 激活状态
+    document.querySelectorAll(".detail-tab").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.detailTab === tab);
+    });
+
+    elements.detailThumbsContainer.innerHTML = "";
+
+    if (!assetList.length) {
+      elements.detailThumbsContainer.innerHTML = `<div class="detail-thumbs-empty">素材库 ${tab} 集合暂无图片</div>`;
+      return;
+    }
+
+    for (let i = 0; i < assetList.length; i++) {
+      const assetId = assetList[i];
+      const thumbUrl = `/api/assets/${encodeURIComponent(assetId)}/preview`;
+      const item = document.createElement("div");
+      item.className = "detail-thumb-item";
+      item.title = `点击查看原素材大图 #${i + 1}: ${assetId}`;
+      item.innerHTML = `
+        <span class="detail-thumb-num">#${i + 1}</span>
+        <img class="detail-thumb-img" src="${thumbUrl}" alt="${escapeHtml(assetId)}" loading="lazy">
+      `;
+
+      item.addEventListener("click", () => {
+        openLightbox(i, assetList, tab, false);
+      });
+
+      elements.detailThumbsContainer.appendChild(item);
+    }
+  }
+
+  function renderDetailBuildThumbsGrid() {
+    if (!state.currentDetail?.latestBuild || !elements.detailBuildThumbsContainer) return;
+
+    const tab = state.currentBuildTab || "all";
+    const buildImgs = state.currentDetail.latestBuild.images || {};
+    const imgList = buildImgs[tab] || [];
+
+    // 更新 Build Tab 激活状态
+    document.querySelectorAll(".detail-build-tab").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.buildTab === tab);
+    });
+
+    elements.detailBuildThumbsContainer.innerHTML = "";
+
+    if (!imgList.length) {
+      elements.detailBuildThumbsContainer.innerHTML = `<div class="detail-thumbs-empty">导出成品 ${tab} 集合暂无图片</div>`;
+      return;
+    }
+
+    for (let i = 0; i < imgList.length; i++) {
+      const imgItem = imgList[i];
+      const item = document.createElement("div");
+      item.className = "detail-thumb-item";
+      const kb = Math.round((imgItem.size_bytes || 0) / 1024);
+      item.title = `点击查看导出成品大图 #${i + 1}: ${imgItem.filename} (${kb} KB)`;
+      item.innerHTML = `
+        <span class="detail-thumb-num">#${i + 1}</span>
+        <img class="detail-thumb-img" src="${imgItem.preview_url}" alt="${escapeHtml(imgItem.filename)}" loading="lazy">
+      `;
+
+      item.addEventListener("click", () => {
+        openLightbox(i, imgList, tab, true);
+      });
+
+      elements.detailBuildThumbsContainer.appendChild(item);
+    }
+  }
+
+  // =========================================================================
+  // 🔍 Lightbox 大图预览弹窗 (支持素材原图与导出成品)
+  // =========================================================================
+
+  function openLightbox(index, list, setName = "all", isBuild = false) {
+    if (!list || !list.length) return;
+    state.lightbox.items = list;
+    state.lightbox.index = Math.max(0, Math.min(index, list.length - 1));
+    state.lightbox.setName = setName;
+    state.lightbox.isBuild = isBuild;
+    updateLightboxView();
+    elements.previewDialog.showModal();
+  }
+
+  function updateLightboxView() {
+    const { items, index, setName, isBuild } = state.lightbox;
+    if (!items.length) return;
+
+    if (isBuild) {
+      const item = items[index];
+      elements.previewImage.src = item.preview_url;
+      elements.lightboxCounter.textContent = `${index + 1} / ${items.length} (导出成品 · ${setName})`;
+      const kb = Math.round((item.size_bytes || 0) / 1024);
+      elements.lightboxCaption.textContent = `[成品] ${item.filename} (${kb} KB)`;
+    } else {
+      const assetId = items[index];
+      const previewUrl = `/api/assets/${encodeURIComponent(assetId)}/preview`;
+      elements.previewImage.src = previewUrl;
+      elements.lightboxCounter.textContent = `${index + 1} / ${items.length} (选集素材 · ${setName})`;
+      elements.lightboxCaption.textContent = `${state.currentDetail?.title || ""} · ${assetId}`;
+    }
+
+    elements.lightboxPrev.disabled = index <= 0;
+    elements.lightboxNext.disabled = index >= items.length - 1;
+  }
+
+  function lightboxStep(offset) {
+    const nextIdx = state.lightbox.index + offset;
+    if (nextIdx >= 0 && nextIdx < state.lightbox.items.length) {
+      state.lightbox.index = nextIdx;
+      updateLightboxView();
+    }
+  }
+
+  // Lightbox 交互绑定
+  elements.lightboxPrev.addEventListener("click", () => lightboxStep(-1));
+  elements.lightboxNext.addEventListener("click", () => lightboxStep(1));
+  elements.closePreview.addEventListener("click", () => elements.previewDialog.close());
+
+  if (elements.lightboxRevealBtn) {
+    elements.lightboxRevealBtn.addEventListener("click", async () => {
+      const { items, index, isBuild, setName } = state.lightbox;
+      if (!items.length) return;
+
+      if (isBuild) {
+        const taskId = state.currentDetail?.task_id;
+        const item = items[index];
+        if (!taskId || !item?.filename) {
+          showNotice("无法定位导出文件", "warning");
+          return;
+        }
+        try {
+          const res = await fetch(
+            `/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(setName)}/${encodeURIComponent(item.filename)}/reveal`,
+            { method: "POST" }
+          );
+          if (res.ok) {
+            showNotice("已在资源管理器中定位导出成品文件", "info");
+          } else {
+            const err = await res.json().catch(() => ({}));
+            showNotice(err.detail || "打开文件夹失败", "error");
+          }
+        } catch (err) {
+          showNotice(`打开文件失败: ${err.message}`, "error");
+        }
+      } else {
+        const assetId = items[index];
+        if (!assetId) return;
+        try {
+          const res = await fetch(`/api/assets/${encodeURIComponent(assetId)}/reveal`, {
+            method: "POST",
+          });
+          if (res.ok) {
+            showNotice("已在资源管理器中定位素材原图文件", "info");
+          } else {
+            const err = await res.json().catch(() => ({}));
+            showNotice(err.detail || "打开文件夹失败", "error");
+          }
+        } catch (err) {
+          showNotice(`打开文件失败: ${err.message}`, "error");
+        }
+      }
+    });
+  }
+
+  if (elements.detailOpenBuildDirBtn) {
+    elements.detailOpenBuildDirBtn.addEventListener("click", async () => {
+      const taskId = state.currentDetail?.task_id;
+      if (!taskId) {
+        showNotice("未选择投稿任务", "warning");
+        return;
+      }
+      try {
+        const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/open-latest-build`, {
+          method: "POST",
+        });
+        if (res.ok) {
+          showNotice("已在资源管理器中打开导出目录", "info");
+        } else {
+          const err = await res.json().catch(() => ({}));
+          showNotice(err.detail || "打开导出目录失败", "error");
+        }
+      } catch (err) {
+        showNotice(`打开导出目录失败: ${err.message}`, "error");
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (!elements.previewDialog.open) return;
+    if (e.key === "ArrowLeft") lightboxStep(-1);
+    if (e.key === "ArrowRight") lightboxStep(1);
+    if (e.key === "Escape") elements.previewDialog.close();
+  });
+
+  // Tab 切换事件 (素材选集 Tabs)
+  document.querySelectorAll(".detail-tab").forEach((tabBtn) => {
+    tabBtn.addEventListener("click", () => {
+      state.currentDetailTab = tabBtn.dataset.detailTab;
+      renderDetailThumbsGrid();
+    });
+  });
+
+  // Tab 切换事件 (导出构建 Tabs)
+  document.querySelectorAll(".detail-build-tab").forEach((tabBtn) => {
+    tabBtn.addEventListener("click", () => {
+      state.currentBuildTab = tabBtn.dataset.buildTab;
+      renderDetailBuildThumbsGrid();
+    });
+  });
+
+  // =========================================================================
+  // 表单操作与事件绑定
+  // =========================================================================
+
 
   async function handleFormSubmit(e) {
     e.preventDefault();
@@ -361,7 +804,6 @@
     if (taskId) {
       contentObj = { kind: "task", task_id: taskId };
     } else {
-      // 保持旧 inline 或创建空 inline
       contentObj = {
         kind: "inline_selection",
         sets: { all: [], post: [], cover: [] },
@@ -436,6 +878,34 @@
     }
   }
 
+  async function handleDetailDeleteSubmission() {
+    const detail = state.currentDetail;
+    if (!detail || !detail.task_id || detail.isInline) return;
+    const title = detail.title || detail.task_id;
+    if (
+      !confirm(
+        `确定要删除投稿任务【${title}】吗？\n\n删除后将彻底移除该投稿任务及月度排期，并自动清理不再被引用的图片的「已投稿」标记。`
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(detail.task_id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail?.message || `删除投稿失败 (${res.status})`);
+      }
+      showNotice(`已成功删除投稿【${title}】`, "info");
+      hideTaskDetail();
+      await Promise.all([loadPlan(state.month), loadSubmissionsList()]);
+      resetEditor();
+    } catch (err) {
+      showNotice(err.message, "error");
+    }
+  }
+
   // 事件监听绑定
   elements.monthPicker.addEventListener("change", (e) => {
     if (e.target.value) loadPlan(e.target.value);
@@ -454,6 +924,9 @@
   });
   elements.entryForm.addEventListener("submit", handleFormSubmit);
   elements.deleteEntryBtn.addEventListener("click", handleDeleteEntry);
+  if (elements.detailDeleteSubmissionBtn) {
+    elements.detailDeleteSubmissionBtn.addEventListener("click", handleDetailDeleteSubmission);
+  }
 
   elements.taskSelect.addEventListener("change", (e) => {
     const selectedTaskId = e.target.value;
@@ -461,8 +934,10 @@
       elements.taskLinkBox.classList.remove("hidden");
       elements.gotoLibraryLink.href = `/library?submission_id=${encodeURIComponent(selectedTaskId)}`;
       elements.legacyNotice.classList.add("hidden");
+      loadAndDisplayTaskDetail(selectedTaskId);
     } else {
       elements.taskLinkBox.classList.add("hidden");
+      hideTaskDetail();
     }
   });
 
@@ -470,3 +945,4 @@
   loadSubmissionsList();
   loadPlan(getQueryMonth());
 })();
+

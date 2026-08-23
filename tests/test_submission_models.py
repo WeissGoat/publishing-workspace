@@ -11,7 +11,7 @@ from publishing_workspace.submissions.models import (
 )
 
 
-def test_submission_fills_post_and_cover_from_all():
+def test_submission_preserves_empty_post_and_cover_on_save():
     submission = Submission(
         submission_id="task-1",
         task_id="task-1",
@@ -19,8 +19,9 @@ def test_submission_fills_post_and_cover_from_all():
         sets={"all": ["sha256:a", "sha256:b"], "post": [], "cover": []},
     )
 
-    assert submission.sets["post"] == ["sha256:a", "sha256:b"]
-    assert submission.sets["cover"] == ["sha256:a"]
+    assert submission.sets["all"] == ["sha256:a", "sha256:b"]
+    assert submission.sets["post"] == []
+    assert submission.sets["cover"] == []
 
 
 def test_submission_deduplicates_items_preserving_order():

@@ -30,8 +30,23 @@
       source_import_id: null,
       revision: 1,
       sets: { all: [], post: [], cover: [] },
+      pixiv: {
+        title: "",
+        caption: "",
+        tags: [],
+        suggested_tags: [],
+        r18: true,
+        allow_tag_edit: true,
+      },
       currentSetTab: "all",
       legacyInlineSource: null, // { plan_id, entry_id, plan_revision }
+    },
+
+    tagSuggestions: {
+      preset: [],
+      character: [],
+      action: [],
+      pixiv: [],
     },
 
     historicalSubmissions: [],
@@ -47,7 +62,6 @@
       isExported: false,
       exportItem: null,
       exportTabName: null,
-      painterro: null,
     },
   };
 
@@ -124,6 +138,24 @@
     submissionDate: document.getElementById("submission-date"),
     submissionTime: document.getElementById("submission-time"),
     clearScheduleBtn: document.getElementById("clear-schedule-btn"),
+
+    // Pixiv 投稿设定
+    pixivAutoBtn: document.getElementById("pixiv-auto-btn"),
+    pixivCaption: document.getElementById("pixiv-caption"),
+    pixivR18: document.getElementById("pixiv-r18"),
+    pixivAllowTagEdit: document.getElementById("pixiv-allow-tag-edit"),
+    pixivTagsCount: document.getElementById("pixiv-tags-count"),
+    clearPixivTagsBtn: document.getElementById("clear-pixiv-tags-btn"),
+    pixivSelectedTags: document.getElementById("pixiv-selected-tags"),
+    pixivCustomTagInput: document.getElementById("pixiv-custom-tag-input"),
+    addPixivCustomTagBtn: document.getElementById("add-pixiv-custom-tag-btn"),
+    recommendPresetTags: document.getElementById("recommend-preset-tags"),
+    syncPixivPastTagsBtn: document.getElementById("sync-pixiv-past-tags-btn"),
+    recommendCharTags: document.getElementById("recommend-char-tags"),
+    recommendActionTags: document.getElementById("recommend-action-tags"),
+    fetchPixivOnlineTagsBtn: document.getElementById("fetch-pixiv-online-tags-btn"),
+    recommendPixivOnlineTags: document.getElementById("recommend-pixiv-online-tags"),
+
     submissionTaskBadge: document.getElementById("submission-task-badge"),
     submissionRevBadge: document.getElementById("submission-rev-badge"),
     tabAll: document.getElementById("tab-all"),
@@ -135,6 +167,7 @@
     clearCurrentSetBtn: document.getElementById("clear-current-set-btn"),
     setItemsContainer: document.getElementById("set-items-container"),
     saveSubmissionBtn: document.getElementById("save-submission-btn"),
+    deleteSubmissionBtn: document.getElementById("delete-submission-btn"),
 
     startExportBtn: document.getElementById("start-export-btn"),
     exportMosaicToggle: document.getElementById("export-mosaic-toggle"),
@@ -159,7 +192,7 @@
     lightboxModeTabs: document.getElementById("lightbox-mode-tabs"),
     lightboxImageArea: document.getElementById("lightbox-image-area"),
     lightboxEditorArea: document.getElementById("lightbox-editor-area"),
-    painterroContainer: document.getElementById("painterro-container"),
+
     previewImage: document.getElementById("preview-image"),
     closePreview: document.getElementById("close-preview"),
     lightboxFilename: document.getElementById("lightbox-filename"),
@@ -198,14 +231,41 @@
     lbRawParameters: document.getElementById("lb-raw-parameters"),
   };
 
+  let noticeTimer = null;
   function showNotice(message, type = "info") {
-    elements.notice.textContent = message;
-    elements.notice.className = `notice ${type}`;
+    clearTimeout(noticeTimer);
+    let noticeEl = elements.notice;
+    if (elements.previewDialog && elements.previewDialog.open) {
+      let dlgNotice = elements.previewDialog.querySelector(".dialog-toast");
+      if (!dlgNotice) {
+        dlgNotice = document.createElement("div");
+        dlgNotice.className = "notice dialog-toast";
+        elements.previewDialog.appendChild(dlgNotice);
+      }
+      noticeEl = dlgNotice;
+    }
+    if (noticeEl) {
+      noticeEl.textContent = message;
+      noticeEl.className = `notice ${type} dialog-toast`;
+    }
+    noticeTimer = setTimeout(() => {
+      clearNotice();
+    }, 3500);
   }
 
   function clearNotice() {
-    elements.notice.textContent = "";
-    elements.notice.className = "notice";
+    clearTimeout(noticeTimer);
+    if (elements.notice) {
+      elements.notice.textContent = "";
+      elements.notice.className = "notice";
+    }
+    if (elements.previewDialog) {
+      const dlgNotice = elements.previewDialog.querySelector(".dialog-toast");
+      if (dlgNotice) {
+        dlgNotice.textContent = "";
+        dlgNotice.className = "notice dialog-toast";
+      }
+    }
   }
 
   function escapeHtml(str) {
@@ -1165,10 +1225,26 @@
           post: data.sets?.post || [],
           cover: data.sets?.cover || [],
         },
+        pixiv: data.pixiv ? {
+          title: data.pixiv.title || data.title || "",
+          caption: data.pixiv.caption || "",
+          tags: Array.isArray(data.pixiv.tags) ? [...data.pixiv.tags] : [],
+          suggested_tags: Array.isArray(data.pixiv.suggested_tags) ? [...data.pixiv.suggested_tags] : [],
+          r18: data.pixiv.r18 !== false,
+          allow_tag_edit: data.pixiv.allow_tag_edit !== false,
+        } : {
+          title: data.title || "",
+          caption: "",
+          tags: [],
+          suggested_tags: [],
+          r18: true,
+          allow_tag_edit: true,
+        },
         scheduled_at: data.scheduled_at || null,
         currentSetTab: "all",
         legacyInlineSource: null,
       };
+      state.tagSuggestions.pixiv = state.currentSubmission.pixiv.suggested_tags || [];
       elements.legacyConvertBanner.classList.add("hidden");
 
       if (data.scheduled_at) {
@@ -1184,6 +1260,8 @@
 
       syncSubmissionFormUI();
       checkLastExportForTask(taskId);
+      // 提取推荐标签（不覆盖标题或已有标签）
+      fetchMetadataSuggestions(data.sets?.all || [], false);
     } catch (err) {
       showNotice(err.message, "error");
     }
@@ -1196,10 +1274,19 @@
       source_import_id: state.filters.import_id || null,
       revision: 1,
       sets: { all: [], post: [], cover: [] },
+      pixiv: {
+        title: "",
+        caption: "",
+        tags: [],
+        suggested_tags: [],
+        r18: true,
+        allow_tag_edit: true,
+      },
       scheduled_at: null,
       currentSetTab: "all",
       legacyInlineSource: null,
     };
+    state.tagSuggestions = { preset: [], character: [], action: [], pixiv: [] };
     elements.legacyConvertBanner.classList.add("hidden");
     elements.historySubmissionSelect.value = "";
     if (elements.submissionDate) elements.submissionDate.value = "";
@@ -1225,8 +1312,144 @@
     elements.tabCover.classList.toggle("active", sub.currentSetTab === "cover");
 
     elements.startExportBtn.disabled = !sub.task_id;
+    if (elements.deleteSubmissionBtn) {
+      elements.deleteSubmissionBtn.classList.toggle("hidden", !sub.task_id);
+    }
 
+    renderPixivMetadataUI();
     renderSetItems();
+  }
+
+  // ================= Pixiv 投稿元数据与推荐标签 =================
+
+  async function fetchMetadataSuggestions(assetIds, isNew = false) {
+    if (!assetIds || !assetIds.length) {
+      state.tagSuggestions = { preset: [], character: [], action: [], pixiv: [] };
+      renderPixivMetadataUI();
+      return;
+    }
+    try {
+      const res = await fetch("/api/submissions/generate-metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_ids: assetIds,
+          import_id: state.filters.import_id || null,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // 仅在新建投稿且标题未被用户输入时自动填充标题
+        if (isNew && (!state.currentSubmission.title || !state.currentSubmission.title.trim())) {
+          if (data.title) {
+            state.currentSubmission.title = data.title;
+            if (elements.submissionTitle) elements.submissionTitle.value = data.title;
+          }
+        }
+        // 如果 pixiv.caption 为空，填充默认 caption
+        if (isNew && (!state.currentSubmission.pixiv.caption || !state.currentSubmission.pixiv.caption.trim())) {
+          if (data.caption) {
+            state.currentSubmission.pixiv.caption = data.caption;
+            if (elements.pixivCaption) elements.pixivCaption.value = data.caption;
+          }
+        }
+        state.tagSuggestions = {
+          preset: data.tag_suggestions?.preset || [],
+          character: data.tag_suggestions?.character || [],
+          action: data.tag_suggestions?.action || [],
+          pixiv: state.tagSuggestions?.pixiv || [],
+        };
+        renderPixivMetadataUI();
+      }
+    } catch (err) {
+      console.warn("生成元数据建议失败", err);
+    }
+  }
+
+  function addPixivTag(tagText) {
+    const text = String(tagText || "").trim();
+    if (!text) return;
+    const currentTags = state.currentSubmission.pixiv.tags || [];
+    if (currentTags.includes(text)) return;
+    if (currentTags.length >= 10) {
+      showNotice("Pixiv 投稿最多支持 10 个标签", "warning");
+      return;
+    }
+    currentTags.push(text);
+    state.currentSubmission.pixiv.tags = currentTags;
+    renderPixivMetadataUI();
+  }
+
+  function removePixivTag(tagText) {
+    const text = String(tagText || "").trim();
+    const currentTags = state.currentSubmission.pixiv.tags || [];
+    state.currentSubmission.pixiv.tags = currentTags.filter((t) => t !== text);
+    renderPixivMetadataUI();
+  }
+
+  function renderPixivMetadataUI() {
+    const pix = state.currentSubmission.pixiv || {
+      title: "",
+      caption: "",
+      tags: [],
+      r18: true,
+      allow_tag_edit: true,
+    };
+    if (elements.pixivCaption) elements.pixivCaption.value = pix.caption || "";
+    if (elements.pixivR18) elements.pixivR18.checked = pix.r18 !== false;
+    if (elements.pixivAllowTagEdit) elements.pixivAllowTagEdit.checked = pix.allow_tag_edit !== false;
+
+    const selectedTags = Array.isArray(pix.tags) ? pix.tags : [];
+    if (elements.pixivTagsCount) {
+      elements.pixivTagsCount.textContent = `(${selectedTags.length}/10)`;
+      elements.pixivTagsCount.style.color = selectedTags.length >= 10 ? "#ef4444" : "#64748b";
+    }
+
+    // 渲染已选标签
+    if (elements.pixivSelectedTags) {
+      elements.pixivSelectedTags.innerHTML = "";
+      if (!selectedTags.length) {
+        elements.pixivSelectedTags.innerHTML = '<span class="helper-text" style="font-size:11px;color:#94a3b8;">暂无标签，可点击下方推荐或手动添加</span>';
+      } else {
+        for (const tag of selectedTags) {
+          const chip = document.createElement("span");
+          chip.className = "pixiv-tag-chip";
+          chip.innerHTML = `${escapeHtml(tag)} <button type="button" class="pixiv-tag-chip-remove" title="移除标签">×</button>`;
+          chip.querySelector(".pixiv-tag-chip-remove").addEventListener("click", (e) => {
+            e.stopPropagation();
+            removePixivTag(tag);
+          });
+          elements.pixivSelectedTags.appendChild(chip);
+        }
+      }
+    }
+
+    // 渲染推荐候选池
+    renderRecommendCategory(elements.recommendPresetTags, state.tagSuggestions?.preset || [], selectedTags);
+    renderRecommendCategory(elements.recommendCharTags, state.tagSuggestions?.character || [], selectedTags);
+    renderRecommendCategory(elements.recommendActionTags, state.tagSuggestions?.action || [], selectedTags);
+    renderRecommendCategory(elements.recommendPixivOnlineTags, state.tagSuggestions?.pixiv || [], selectedTags);
+  }
+
+  function renderRecommendCategory(container, list, selectedTags) {
+    if (!container) return;
+    container.innerHTML = "";
+    if (!list || !list.length) {
+      container.innerHTML = '<span class="helper-text" style="font-size:10px;color:#cbd5e1;">(无候选)</span>';
+      return;
+    }
+    for (const tag of list) {
+      const isAdded = selectedTags.includes(tag);
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = `recommend-chip ${isAdded ? "added" : ""}`;
+      chip.textContent = isAdded ? `✓ ${tag}` : `+ ${tag}`;
+      chip.title = isAdded ? "已添加到标签" : "点击添加到标签";
+      if (!isAdded) {
+        chip.addEventListener("click", () => addPixivTag(tag));
+      }
+      container.appendChild(chip);
+    }
   }
 
   function renderSetItems() {
@@ -1258,8 +1481,11 @@
 
       const row = document.createElement("div");
       row.className = "set-item-row";
-      row.title = "点击查看大图与生成详情";
+      row.draggable = true;
+      row.dataset.setIndex = String(index);
+      row.title = "上下拖拽可调整排序；点击查看大图与生成详情";
       row.innerHTML = `
+        <span class="set-item-drag-handle" title="按住上下拖拽调整顺序">⠿</span>
         <span class="set-item-idx">#${index + 1}</span>
         <img class="set-item-thumb" src="${previewUrl}" alt="thumb" loading="lazy">
         <div class="set-item-info">
@@ -1268,9 +1494,65 @@
         </div>
       `;
 
-      // 点击整行直接打开大图与详情（并在当前集合列表中前后切换）
-      row.addEventListener("click", () => {
+      // 点击整行直接打开大图与详情（在非拖拽状态下）
+      let isDragging = false;
+      row.addEventListener("click", (e) => {
+        if (isDragging) return;
+        if (e.target.closest(".set-item-action-btn") || e.target.closest(".set-item-drag-handle")) return;
         openLightbox(assetId, [...assetIds]);
+      });
+
+      // 拖拽排序事件
+      row.addEventListener("dragstart", (e) => {
+        isDragging = true;
+        state.draggedSetItemIndex = index;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(index));
+        setTimeout(() => row.classList.add("dragging"), 0);
+      });
+
+      row.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const rect = row.getBoundingClientRect();
+        const isTop = e.clientY - rect.top < rect.height / 2;
+        row.classList.toggle("drag-over-top", isTop);
+        row.classList.toggle("drag-over-bottom", !isTop);
+      });
+
+      row.addEventListener("dragleave", () => {
+        row.classList.remove("drag-over-top", "drag-over-bottom");
+      });
+
+      row.addEventListener("drop", (e) => {
+        e.preventDefault();
+        row.classList.remove("drag-over-top", "drag-over-bottom");
+        const srcIdx = state.draggedSetItemIndex;
+        if (srcIdx === null || srcIdx === undefined || srcIdx === index) return;
+
+        const rect = row.getBoundingClientRect();
+        const isTop = e.clientY - rect.top < rect.height / 2;
+
+        const list = state.currentSubmission.sets[activeSet];
+        const [movedItem] = list.splice(srcIdx, 1);
+        let insertIdx = index;
+        if (!isTop) {
+          insertIdx = srcIdx < index ? index : index + 1;
+        } else {
+          insertIdx = srcIdx < index ? index - 1 : index;
+        }
+        insertIdx = Math.max(0, Math.min(insertIdx, list.length));
+        list.splice(insertIdx, 0, movedItem);
+        state.draggedSetItemIndex = null;
+        syncSubmissionFormUI();
+      });
+
+      row.addEventListener("dragend", () => {
+        isDragging = false;
+        state.draggedSetItemIndex = null;
+        document.querySelectorAll(".set-item-row").forEach((r) => {
+          r.classList.remove("dragging", "drag-over-top", "drag-over-bottom");
+        });
       });
 
       const actionsWrap = document.createElement("div");
@@ -1349,6 +1631,14 @@
       title: title,
       source_import_id: sub.source_import_id || state.filters.import_id || null,
       sets: sub.sets,
+      pixiv: {
+        title: title,
+        caption: elements.pixivCaption ? elements.pixivCaption.value.trim() : (sub.pixiv?.caption || ""),
+        tags: sub.pixiv?.tags || [],
+        suggested_tags: sub.pixiv?.suggested_tags || state.tagSuggestions.pixiv || [],
+        r18: elements.pixivR18 ? elements.pixivR18.checked : (sub.pixiv?.r18 !== false),
+        allow_tag_edit: elements.pixivAllowTagEdit ? elements.pixivAllowTagEdit.checked : (sub.pixiv?.allow_tag_edit !== false),
+      },
       revision: sub.task_id ? sub.revision : null,
       scheduled_at: scheduledAt,
     };
@@ -1397,13 +1687,63 @@
         source_import_id: savedData.source_import_id,
         revision: savedData.revision,
         sets: savedData.sets,
+        pixiv: savedData.pixiv ? {
+          title: savedData.pixiv.title || savedData.title,
+          caption: savedData.pixiv.caption || "",
+          tags: Array.isArray(savedData.pixiv.tags) ? [...savedData.pixiv.tags] : [],
+          suggested_tags: Array.isArray(savedData.pixiv.suggested_tags) ? [...savedData.pixiv.suggested_tags] : [],
+          r18: savedData.pixiv.r18 !== false,
+          allow_tag_edit: savedData.pixiv.allow_tag_edit !== false,
+        } : payload.pixiv,
         scheduled_at: savedData.scheduled_at || null,
         currentSetTab: sub.currentSetTab,
         legacyInlineSource: null,
       };
+      state.tagSuggestions.pixiv = state.currentSubmission.pixiv.suggested_tags || [];
 
       syncSubmissionFormUI();
       loadHistoricalSubmissions();
+    } catch (err) {
+      showNotice(err.message, "error");
+    }
+  }
+
+  async function handleDeleteSubmission() {
+    const sub = state.currentSubmission;
+    if (!sub || !sub.task_id) return;
+    const title = elements.submissionTitle.value.trim() || sub.task_id;
+    if (
+      !confirm(
+        `确定要删除投稿任务【${title}】吗？\n\n删除后将彻底移除该投稿选集与导出产物，并自动清理不再被其他投稿引用的图片的「已投稿」标记。`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(sub.task_id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail?.message || `删除投稿失败 (${res.status})`);
+      }
+      const data = await res.json();
+      showNotice(`已成功删除投稿【${title}】`, "info");
+
+      // 如果当前快照中有被取消标记的素材，更新本地状态
+      const unmarkedSet = new Set(data.unmarked_asset_ids || []);
+      if (unmarkedSet.size > 0 && state.allAssets) {
+        state.allAssets.forEach((item) => {
+          if (unmarkedSet.has(item.asset_id)) {
+            item.usage = (item.usage || []).filter((u) => u === "favorite");
+          }
+        });
+        applyInstantFilters();
+      }
+
+      resetSubmissionEditor();
+      await loadHistoricalSubmissions();
     } catch (err) {
       showNotice(err.message, "error");
     }
@@ -1582,82 +1922,345 @@
     }
   }
 
-  function getOrCreatePainterro() {
-    if (state.lightbox.painterro) {
-      return state.lightbox.painterro;
+  // =====================================================================
+  // 🎨 自研轻量马赛克画笔编辑器 (替代 Painterro)
+  // 参考图贴士 tutieshi.com/mosaic 的多层 Canvas 画笔马赛克交互
+  // =====================================================================
+  const mosaicEditor = {
+    canvas: null,       // 主画布 (绘制结果)
+    cursorCanvas: null,  // 光标画布 (hover 光标)
+    ctx: null,
+    cursorCtx: null,
+    wrap: null,          // 容器 div
+    originalImg: null,   // 原始图片 Image 对象
+    originalData: null,  // 原始图片像素数据 (用于取色, 避免重复像素化导致推色)
+    painting: false,     // 是否正在绘制
+    undoStack: [],       // 撤销栈 (ImageData 快照)
+    redoStack: [],       // 重做栈
+    maxUndoSteps: 30,
+    loaded: false,
+    // 视口变换 (图片可能大于容器，需要缩放居中)
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    imgW: 0,
+    imgH: 0,
+  };
+
+  /** 初始化马赛克编辑器 DOM 引用 */
+  function initMosaicEditor() {
+    mosaicEditor.canvas = document.getElementById("mosaic-canvas-main");
+    mosaicEditor.cursorCanvas = document.getElementById("mosaic-canvas-cursor");
+    mosaicEditor.wrap = document.getElementById("mosaic-canvas-wrap");
+    if (!mosaicEditor.canvas || !mosaicEditor.cursorCanvas || !mosaicEditor.wrap) return;
+    mosaicEditor.ctx = mosaicEditor.canvas.getContext("2d", { willReadFrequently: true });
+    mosaicEditor.cursorCtx = mosaicEditor.cursorCanvas.getContext("2d");
+
+    // 鼠标事件绑定
+    mosaicEditor.wrap.addEventListener("mousedown", onMosaicMouseDown);
+    mosaicEditor.wrap.addEventListener("mousemove", onMosaicMouseMove);
+    mosaicEditor.wrap.addEventListener("mouseup", onMosaicMouseUp);
+    mosaicEditor.wrap.addEventListener("mouseleave", onMosaicMouseUp);
+
+    // 工具栏
+    const brushSizeSlider = document.getElementById("mosaic-brush-size");
+    const blockSizeSlider = document.getElementById("mosaic-block-size");
+    if (brushSizeSlider) {
+      brushSizeSlider.addEventListener("input", () => {
+        document.getElementById("mosaic-brush-size-val").textContent = brushSizeSlider.value;
+      });
     }
-    if (!window.Painterro) return null;
+    if (blockSizeSlider) {
+      blockSizeSlider.addEventListener("input", () => {
+        document.getElementById("mosaic-block-size-val").textContent = blockSizeSlider.value;
+      });
+    }
+
+    const undoBtn = document.getElementById("mosaic-undo-btn");
+    const redoBtn = document.getElementById("mosaic-redo-btn");
+    const saveBtn = document.getElementById("mosaic-save-btn");
+    if (undoBtn) undoBtn.addEventListener("click", mosaicUndo);
+    if (redoBtn) redoBtn.addEventListener("click", mosaicRedo);
+    if (saveBtn) saveBtn.addEventListener("click", mosaicSave);
+
+    // 键盘快捷键
+    document.addEventListener("keydown", (e) => {
+      if (state.lightbox.mode !== "edit") return;
+      if (e.ctrlKey && e.key === "z") { e.preventDefault(); mosaicUndo(); }
+      if (e.ctrlKey && e.key === "y") { e.preventDefault(); mosaicRedo(); }
+    });
+  }
+
+  /** 加载图片到画布 */
+  function loadImageToMosaic(url) {
+    mosaicEditor.loaded = false;
+    mosaicEditor.undoStack = [];
+    mosaicEditor.redoStack = [];
+    updateUndoRedoButtons();
+
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      mosaicEditor.originalImg = img;
+      mosaicEditor.imgW = img.naturalWidth;
+      mosaicEditor.imgH = img.naturalHeight;
+      fitCanvasToWrap();
+      mosaicEditor.loaded = true;
+      // 保存初始快照
+      pushUndoSnapshot();
+    };
+    img.onerror = () => {
+      showNotice("加载图片到编辑器失败", "error");
+    };
+    img.src = url;
+  }
+
+  /** 根据容器尺寸计算缩放 & 重绘画布 */
+  function fitCanvasToWrap() {
+    if (!mosaicEditor.wrap || !mosaicEditor.originalImg) return;
+    const wrapRect = mosaicEditor.wrap.getBoundingClientRect();
+    const wW = wrapRect.width;
+    const wH = wrapRect.height;
+    const iW = mosaicEditor.imgW;
+    const iH = mosaicEditor.imgH;
+
+    // 画布尺寸 = 原始图片尺寸 (1:1 像素操作, 不损失精度)
+    mosaicEditor.canvas.width = iW;
+    mosaicEditor.canvas.height = iH;
+    mosaicEditor.cursorCanvas.width = iW;
+    mosaicEditor.cursorCanvas.height = iH;
+
+    // CSS 缩放以适配容器
+    const scale = Math.min(wW / iW, wH / iH, 1); // 不超过原图
+    mosaicEditor.scale = scale;
+    const displayW = Math.round(iW * scale);
+    const displayH = Math.round(iH * scale);
+    mosaicEditor.offsetX = Math.round((wW - displayW) / 2);
+    mosaicEditor.offsetY = Math.round((wH - displayH) / 2);
+
+    // 设置 CSS 尺寸 & 位置
+    [mosaicEditor.canvas, mosaicEditor.cursorCanvas].forEach(c => {
+      c.style.width = displayW + "px";
+      c.style.height = displayH + "px";
+      c.style.left = mosaicEditor.offsetX + "px";
+      c.style.top = mosaicEditor.offsetY + "px";
+    });
+
+    // 绘制原图到主画布 & 缓存原始像素数据
+    mosaicEditor.ctx.drawImage(mosaicEditor.originalImg, 0, 0, iW, iH);
+    mosaicEditor.originalData = mosaicEditor.ctx.getImageData(0, 0, iW, iH);
+  }
+
+  /** 鼠标坐标 → 画布像素坐标 */
+  function wrapMouseToCanvas(e) {
+    const rect = mosaicEditor.wrap.getBoundingClientRect();
+    const mx = e.clientX - rect.left - mosaicEditor.offsetX;
+    const my = e.clientY - rect.top - mosaicEditor.offsetY;
+    return {
+      x: Math.round(mx / mosaicEditor.scale),
+      y: Math.round(my / mosaicEditor.scale),
+    };
+  }
+
+  /** 在画布指定位置执行马赛克打码 (核心算法) */
+  function applyMosaicAt(cx, cy) {
+    const ctx = mosaicEditor.ctx;
+    const origData = mosaicEditor.originalData;
+    if (!origData) return;
+    const brushR = parseInt(document.getElementById("mosaic-brush-size").value, 10) || 28;
+    const blockSize = parseInt(document.getElementById("mosaic-block-size").value, 10) || 12;
+    const iW = mosaicEditor.imgW;
+    const iH = mosaicEditor.imgH;
+    const origPx = origData.data;
+
+    // 画笔半径 (画布像素空间)
+    const r = Math.round(brushR / mosaicEditor.scale);
+
+    // 计算受影响的矩形区域
+    const x0 = Math.max(0, cx - r);
+    const y0 = Math.max(0, cy - r);
+    const x1 = Math.min(iW, cx + r);
+    const y1 = Math.min(iH, cy + r);
+    if (x1 <= x0 || y1 <= y0) return;
+
+    // 获取当前画布该区域用于写入
+    const regionW = x1 - x0;
+    const regionH = y1 - y0;
+    const imgData = ctx.getImageData(x0, y0, regionW, regionH);
+    const data = imgData.data;
+
+    // 🔑 关键：对齐到全局网格 (基于图片 (0,0) 的 blockSize 倍数)
+    // 这样无论画笔从哪里开始涂，同一个格子始终一致
+    const gridX0 = Math.floor(x0 / blockSize) * blockSize;
+    const gridY0 = Math.floor(y0 / blockSize) * blockSize;
+    const gridX1 = Math.ceil(x1 / blockSize) * blockSize;
+    const gridY1 = Math.ceil(y1 / blockSize) * blockSize;
+
+    for (let gy = gridY0; gy < gridY1; gy += blockSize) {
+      for (let gx = gridX0; gx < gridX1; gx += blockSize) {
+        // 块在图片中的实际范围 (裁剪到图片边界)
+        const bx0 = Math.max(gx, 0);
+        const by0 = Math.max(gy, 0);
+        const bx1 = Math.min(gx + blockSize, iW);
+        const by1 = Math.min(gy + blockSize, iH);
+        if (bx1 <= bx0 || by1 <= by0) continue;
+
+        // 检查块中心是否在画笔圆内
+        const bcx = (bx0 + bx1) / 2;
+        const bcy = (by0 + by1) / 2;
+        const dx = bcx - cx;
+        const dy = bcy - cy;
+        if (dx * dx + dy * dy > r * r) continue;
+
+        // 从【原始图片】计算块内平均色
+        let sumR = 0, sumG = 0, sumB = 0, count = 0;
+        for (let py = by0; py < by1; py++) {
+          for (let px = bx0; px < bx1; px++) {
+            const origIdx = (py * iW + px) * 4;
+            sumR += origPx[origIdx];
+            sumG += origPx[origIdx + 1];
+            sumB += origPx[origIdx + 2];
+            count++;
+          }
+        }
+        const avgR = Math.round(sumR / count);
+        const avgG = Math.round(sumG / count);
+        const avgB = Math.round(sumB / count);
+
+        // 用平均色填充到当前画布 (转换为区域局部坐标)
+        for (let py = by0; py < by1; py++) {
+          for (let px = bx0; px < bx1; px++) {
+            const localX = px - x0;
+            const localY = py - y0;
+            if (localX < 0 || localX >= regionW || localY < 0 || localY >= regionH) continue;
+            const idx = (localY * regionW + localX) * 4;
+            data[idx] = avgR;
+            data[idx + 1] = avgG;
+            data[idx + 2] = avgB;
+          }
+        }
+      }
+    }
+
+    ctx.putImageData(imgData, x0, y0);
+  }
+
+  /** 绘制画笔光标 */
+  function drawMosaicCursor(cx, cy) {
+    const cCtx = mosaicEditor.cursorCtx;
+    const iW = mosaicEditor.imgW;
+    const iH = mosaicEditor.imgH;
+    cCtx.clearRect(0, 0, iW, iH);
+
+    const brushR = parseInt(document.getElementById("mosaic-brush-size").value, 10) || 28;
+    const r = Math.round(brushR / mosaicEditor.scale);
+
+    cCtx.beginPath();
+    cCtx.arc(cx, cy, r, 0, Math.PI * 2);
+    cCtx.strokeStyle = "rgba(88,166,255,0.8)";
+    cCtx.lineWidth = Math.max(1, 2 / mosaicEditor.scale);
+    cCtx.stroke();
+    // 半透明填充预览
+    cCtx.fillStyle = "rgba(88,166,255,0.08)";
+    cCtx.fill();
+  }
+
+  function onMosaicMouseDown(e) {
+    if (e.button !== 0 || !mosaicEditor.loaded) return;
+    mosaicEditor.painting = true;
+    const { x, y } = wrapMouseToCanvas(e);
+    applyMosaicAt(x, y);
+  }
+
+  function onMosaicMouseMove(e) {
+    if (!mosaicEditor.loaded) return;
+    const { x, y } = wrapMouseToCanvas(e);
+    drawMosaicCursor(x, y);
+    if (mosaicEditor.painting) {
+      applyMosaicAt(x, y);
+    }
+  }
+
+  function onMosaicMouseUp(e) {
+    if (mosaicEditor.painting) {
+      mosaicEditor.painting = false;
+      // 松开鼠标后保存一个撤销快照
+      pushUndoSnapshot();
+    }
+  }
+
+  /** 保存快照到撤销栈 */
+  function pushUndoSnapshot() {
+    if (!mosaicEditor.ctx || !mosaicEditor.loaded) return;
+    const snap = mosaicEditor.ctx.getImageData(0, 0, mosaicEditor.imgW, mosaicEditor.imgH);
+    mosaicEditor.undoStack.push(snap);
+    if (mosaicEditor.undoStack.length > mosaicEditor.maxUndoSteps) {
+      mosaicEditor.undoStack.shift();
+    }
+    mosaicEditor.redoStack = [];
+    updateUndoRedoButtons();
+  }
+
+  function mosaicUndo() {
+    if (mosaicEditor.undoStack.length <= 1) return; // 栈底是初始状态
+    const current = mosaicEditor.undoStack.pop();
+    mosaicEditor.redoStack.push(current);
+    const prev = mosaicEditor.undoStack[mosaicEditor.undoStack.length - 1];
+    mosaicEditor.ctx.putImageData(prev, 0, 0);
+    updateUndoRedoButtons();
+  }
+
+  function mosaicRedo() {
+    if (mosaicEditor.redoStack.length === 0) return;
+    const snap = mosaicEditor.redoStack.pop();
+    mosaicEditor.undoStack.push(snap);
+    mosaicEditor.ctx.putImageData(snap, 0, 0);
+    updateUndoRedoButtons();
+  }
+
+  function updateUndoRedoButtons() {
+    const undoBtn = document.getElementById("mosaic-undo-btn");
+    const redoBtn = document.getElementById("mosaic-redo-btn");
+    if (undoBtn) undoBtn.disabled = mosaicEditor.undoStack.length <= 1;
+    if (redoBtn) redoBtn.disabled = mosaicEditor.redoStack.length === 0;
+  }
+
+  /** 保存编辑结果到后端 */
+  async function mosaicSave() {
+    const item = state.lightbox.exportItem;
+    if (!item || !mosaicEditor.loaded) return;
 
     try {
-      const ptr = window.Painterro({
-        id: "painterro-container",
-        activeColor: "#000000",
-        activeColorAlpha: 1.0,
-        defaultTool: "pixelize",
-        pixelizePixelSize: "20%",
-        language: "zh",
-        translation: {
-          name: "zh",
-          strings: {
-            backgroundColor: "画布背景色",
-            pixelizePixelSize: "马赛克颗粒大小 (默认 20% 或 15px)",
-            apply: "应用",
-            cancel: "取消",
-            save: "保存",
-            wrongPixelSizeValue: "颗粒大小格式错误，请输入如 20% 或 15px",
-          },
-        },
-        availableTools: ["crop", "pixelize", "brush", "rect", "eraser", "undo", "redo", "save", "open", "zoomin", "zoomout", "settings"],
-        saveHandler: async (image, done) => {
-          const item = state.lightbox.exportItem;
-          if (!item) {
-            done(false);
-            return;
-          }
-          try {
-            showNotice("正在保存手动打码修改...", "info");
-            const dataUrl = image.asDataURL("image/png");
-            const blob = await fetch(dataUrl).then((r) => r.blob());
-            const taskId = state.currentSubmission.task_id;
-            const tabName = state.lightbox.exportTabName;
-            const filename = item.filename;
+      showNotice("正在保存手动打码修改...", "info");
 
-            const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(tabName)}/${encodeURIComponent(filename)}`, {
-              method: "PUT",
-              headers: { "Content-Type": "image/png" },
-              body: blob,
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({}));
-              throw new Error(err.detail || `保存失败 (${res.status})`);
-            }
+      // 导出 canvas 为 PNG blob
+      const blob = await new Promise(resolve => mosaicEditor.canvas.toBlob(resolve, "image/png"));
+      const taskId = state.currentSubmission.task_id;
+      const tabName = state.lightbox.exportTabName;
+      const filename = item.filename;
 
-            done(true);
-            showNotice("✅ 手动打码已成功保存到发布包！", "success");
-
-            // 刷新大图与面板缩略图
-            const cacheBustUrl = `${item.preview_url.split("?")[0]}?t=${Date.now()}`;
-            item.preview_url = cacheBustUrl;
-            elements.previewImage.src = cacheBustUrl;
-
-            // 重新渲染当前图集缩略图
-            renderExportedThumbsGrid();
-
-            // 自动切回 view 模式
-            switchLightboxMode("view");
-          } catch (err) {
-            showNotice(`保存编辑失败：${err.message}`, "error");
-            done(false);
-          }
-        },
+      const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(tabName)}/${encodeURIComponent(filename)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "image/png" },
+        body: blob,
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `保存失败 (${res.status})`);
+      }
 
-      state.lightbox.painterro = ptr;
-      return ptr;
-    } catch (e) {
-      console.error("Painterro 初始化异常", e);
-      showNotice(`初始化图片编辑器失败：${e.message}`, "error");
-      return null;
+      showNotice("✅ 手动打码已成功保存到发布包！", "success");
+
+      // 刷新大图与面板缩略图
+      const cacheBustUrl = `${item.preview_url.split("?")[0]}?t=${Date.now()}`;
+      item.preview_url = cacheBustUrl;
+      elements.previewImage.src = cacheBustUrl;
+      renderExportedThumbsGrid();
+
+      // 自动切回 view 模式
+      switchLightboxMode("view");
+    } catch (err) {
+      showNotice(`保存编辑失败：${err.message}`, "error");
     }
   }
 
@@ -1669,34 +2272,36 @@
       });
     }
 
+    const body = elements.lightboxContainer ? elements.lightboxContainer.querySelector(".lightbox-body") : null;
+
     if (mode === "edit") {
-      if (elements.lightboxContainer) elements.lightboxContainer.classList.add("mode-edit");
+      if (body) body.classList.add("mode-edit");
       if (elements.lightboxImageArea) elements.lightboxImageArea.classList.add("hidden");
       if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.remove("hidden");
 
       const item = state.lightbox.exportItem;
       if (item) {
-        const ptr = getOrCreatePainterro();
-        if (ptr) {
-          ptr.show(item.preview_url);
-        }
+        // 延迟一帧以确保容器可见后再计算尺寸
+        requestAnimationFrame(() => loadImageToMosaic(item.preview_url));
       }
     } else {
-      if (elements.lightboxContainer) elements.lightboxContainer.classList.remove("mode-edit");
+      if (body) body.classList.remove("mode-edit");
       if (elements.lightboxImageArea) elements.lightboxImageArea.classList.remove("hidden");
       if (elements.lightboxEditorArea) elements.lightboxEditorArea.classList.add("hidden");
     }
   }
 
-  function openExportedLightbox(index, imgList, tabName) {
+  async function openExportedLightbox(index, imgList, tabName) {
     if (!imgList || !imgList[index]) return;
     const item = imgList[index];
     state.lightbox.activeAssetId = null;
-    state.lightbox.list = [];
-    state.lightbox.index = 0;
+    state.lightbox.assetList = [];
+    state.lightbox.currentIndex = index;
     state.lightbox.isExported = true;
     state.lightbox.exportItem = item;
     state.lightbox.exportTabName = tabName;
+
+    const taskId = state.currentSubmission?.task_id || state.latestBuildData?.task_id;
 
     // 显示模式切换页签栏
     if (elements.lightboxModeTabs) {
@@ -1707,25 +2312,90 @@
     elements.previewImage.src = item.preview_url;
     elements.previewImage.alt = item.filename;
     elements.lightboxFilename.textContent = `[导出成品·${tabName}] ${item.filename}`;
-    elements.lightboxFilepath.textContent = `${state.latestBuildData.output_dir}\\output\\${tabName}\\${item.filename}`;
+    const outDir = state.latestBuildData?.output_dir || "";
+    elements.lightboxFilepath.textContent = outDir ? `${outDir}\\output\\${tabName}\\${item.filename}` : item.filename;
     elements.lightboxCounter.textContent = `${index + 1} / ${imgList.length}`;
 
     // 隐藏打码和收藏按钮，这是成品图
     elements.lightboxFavoriteBtn.classList.add("hidden");
     elements.lightboxPostedBtn.classList.add("hidden");
 
+    // 初始重置元数据面板（正在从文件解析...）
+    const kb = Math.round((item.size_bytes || 0) / 1024);
+    elements.lbMetaDimensions.textContent = "读取中...";
+    elements.lbMetaSize.textContent = `${kb} KB`;
+    elements.lbMetaMtime.textContent = "-";
+
+    elements.lbMetaSeed.textContent = "-";
+    elements.lbMetaModel.textContent = "-";
+    elements.lbMetaSampler.textContent = "-";
+    elements.lbMetaSteps.textContent = "-";
+    elements.lbMetaScale.textContent = "-";
+    elements.lbMetaNoise.textContent = "-";
+
+    elements.lbNodeArtist.textContent = "-";
+    elements.lbNodeCharacter.textContent = "-";
+    elements.lbNodeGroup.textContent = "-";
+    elements.lbNodeAction.textContent = "-";
+    if (elements.lbFacetsSection) {
+      elements.lbFacetsSection.hidden = true;
+    }
+
+    elements.lbPromptBox.textContent = "读取中...";
+    elements.lbNegativeBox.textContent = "读取中...";
+    elements.lbRawParameters.textContent = "读取中...";
+
     elements.lightboxPrevBtn.disabled = index <= 0;
     elements.lightboxNextBtn.disabled = index >= imgList.length - 1;
 
     // 绑定前后切换
-    elements.lightboxPrevBtn.onclick = () => {
+    elements.lightboxPrevBtn.onclick = (e) => {
+      e.stopPropagation();
       if (index > 0) openExportedLightbox(index - 1, imgList, tabName);
     };
-    elements.lightboxNextBtn.onclick = () => {
+    elements.lightboxNextBtn.onclick = (e) => {
+      e.stopPropagation();
       if (index < imgList.length - 1) openExportedLightbox(index + 1, imgList, tabName);
     };
 
-    elements.previewDialog.showModal();
+    if (!elements.previewDialog.open) {
+      elements.previewDialog.showModal();
+    }
+
+    // 真实从磁盘上的导出文件读取元数据并渲染，不伪造任何内容
+    if (taskId && item.filename) {
+      try {
+        const res = await fetch(
+          `/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(tabName)}/${encodeURIComponent(item.filename)}/details`
+        );
+        if (res.ok && state.lightbox.isExported && state.lightbox.exportItem?.filename === item.filename) {
+          const detail = await res.json();
+          const gen = detail.generation_info || {};
+
+          elements.lbMetaDimensions.textContent = `${detail.width} × ${detail.height} (${detail.image_format || "PNG"})`;
+          elements.lbMetaSize.textContent = gen.file_size_human || `${kb} KB`;
+          elements.lbMetaMtime.textContent = gen.modified_at || "-";
+
+          elements.lbMetaSeed.textContent = gen.seed !== null && gen.seed !== undefined ? String(gen.seed) : "-";
+          elements.lbMetaModel.textContent = gen.model || "-";
+          elements.lbMetaSampler.textContent = gen.sampler || "-";
+          elements.lbMetaSteps.textContent = gen.steps !== null && gen.steps !== undefined ? String(gen.steps) : "-";
+          elements.lbMetaScale.textContent = gen.scale !== null && gen.scale !== undefined ? String(gen.scale) : "-";
+          elements.lbMetaNoise.textContent = gen.noise_schedule || "-";
+
+          elements.lbPromptBox.textContent = gen.prompt || "无 Prompt 记录";
+          elements.lbNegativeBox.textContent = gen.negative_prompt || "无 Negative 记录";
+
+          elements.lbRawParameters.textContent =
+            gen.raw_parameters ||
+            (gen.all_chunks && Object.keys(gen.all_chunks).length
+              ? JSON.stringify(gen.all_chunks, null, 2)
+              : "无原始参数");
+        }
+      } catch (err) {
+        console.warn("读取导出文件元数据失败", err);
+      }
+    }
   }
 
   async function handleStartExport() {
@@ -1808,18 +2478,23 @@
   }
 
   async function handleOpenExportDir() {
-    const taskId = state.currentSubmission.task_id;
-    if (!taskId) return;
+    const taskId = state.currentSubmission?.task_id || state.latestBuildData?.task_id;
+    if (!taskId) {
+      showNotice("请先选择一个投稿任务", "warning");
+      return;
+    }
     try {
       const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/open-latest-build`, {
         method: "POST",
       });
-      if (!res.ok) {
+      if (res.ok) {
+        showNotice("已在资源管理器中打开导出目录", "info");
+      } else {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail?.message || `打开目录失败 (${res.status})`);
+        showNotice(errData.detail || `打开目录失败 (${res.status})`, "error");
       }
     } catch (err) {
-      showNotice(err.message, "error");
+      showNotice(`打开目录失败: ${err.message}`, "error");
     }
   }
 
@@ -2027,6 +2702,11 @@
     // 需求 3：点击加入集合后自动清选
     clearAllAssetSelection();
     showNotice(`已将 ${count} 项素材加入【${activeSet}】集合，并已自动清选`, "info");
+
+    // 若当前为新建投稿且尚未生成标题，自动基于当前选集触发标题与推荐标签获取
+    if (!state.currentSubmission.task_id) {
+      fetchMetadataSuggestions(state.currentSubmission.sets.all, true);
+    }
   });
 
   // 集合 Tab 切换
@@ -2074,6 +2754,133 @@
     });
   }
 
+  // Pixiv 投稿设定事件绑定
+  if (elements.pixivAutoBtn) {
+    elements.pixivAutoBtn.addEventListener("click", () => {
+      fetchMetadataSuggestions(state.currentSubmission.sets.all, true);
+      showNotice("已重新提取角色标题与推荐标签", "info");
+    });
+  }
+
+  if (elements.pixivCaption) {
+    elements.pixivCaption.addEventListener("input", (e) => {
+      if (state.currentSubmission.pixiv) {
+        state.currentSubmission.pixiv.caption = e.target.value;
+      }
+    });
+  }
+
+  if (elements.pixivR18) {
+    elements.pixivR18.addEventListener("change", (e) => {
+      if (state.currentSubmission.pixiv) {
+        state.currentSubmission.pixiv.r18 = e.target.checked;
+      }
+    });
+  }
+
+  if (elements.pixivAllowTagEdit) {
+    elements.pixivAllowTagEdit.addEventListener("change", (e) => {
+      if (state.currentSubmission.pixiv) {
+        state.currentSubmission.pixiv.allow_tag_edit = e.target.checked;
+      }
+    });
+  }
+
+  if (elements.clearPixivTagsBtn) {
+    elements.clearPixivTagsBtn.addEventListener("click", () => {
+      if (state.currentSubmission.pixiv) {
+        state.currentSubmission.pixiv.tags = [];
+        renderPixivMetadataUI();
+      }
+    });
+  }
+
+  if (elements.addPixivCustomTagBtn && elements.pixivCustomTagInput) {
+    const handleAddCustomTag = () => {
+      const val = elements.pixivCustomTagInput.value.trim();
+      if (val) {
+        addPixivTag(val);
+        elements.pixivCustomTagInput.value = "";
+      }
+    };
+    elements.addPixivCustomTagBtn.addEventListener("click", handleAddCustomTag);
+    elements.pixivCustomTagInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleAddCustomTag();
+      }
+    });
+  }
+
+  if (elements.fetchPixivOnlineTagsBtn) {
+    elements.fetchPixivOnlineTagsBtn.addEventListener("click", async () => {
+      const sub = state.currentSubmission;
+      const targetId = sub.sets.cover[0] || sub.sets.post[0] || sub.sets.all[0];
+      if (!targetId) {
+        showNotice("当前集合中没有图片可供识别", "warning");
+        return;
+      }
+      elements.fetchPixivOnlineTagsBtn.disabled = true;
+      elements.fetchPixivOnlineTagsBtn.textContent = "识别中...";
+      try {
+        const res = await fetch("/api/submissions/suggest-pixiv-tags", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            asset_id: targetId,
+            import_id: state.filters.import_id || null,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const tags = data.tags || [];
+          state.tagSuggestions.pixiv = tags;
+          if (state.currentSubmission.pixiv) {
+            state.currentSubmission.pixiv.suggested_tags = tags;
+          }
+          renderPixivMetadataUI();
+          if (tags.length) {
+            showNotice(`已获取到 ${tags.length} 个 Pixiv 识别推荐标签并绑定到投稿`, "info");
+          } else {
+            showNotice("Pixiv 未返回识别标签（可能未配置 Cookie 或网络不可达）", "warning");
+          }
+        } else {
+          showNotice("获取 Pixiv 识别标签失败", "error");
+        }
+      } catch (err) {
+        showNotice(`获取 Pixiv 识别标签失败: ${err.message}`, "error");
+      } finally {
+        elements.fetchPixivOnlineTagsBtn.disabled = false;
+        elements.fetchPixivOnlineTagsBtn.textContent = "🔍 图片识别";
+      }
+    });
+  }
+
+  if (elements.syncPixivPastTagsBtn) {
+    elements.syncPixivPastTagsBtn.addEventListener("click", async () => {
+      elements.syncPixivPastTagsBtn.disabled = true;
+      elements.syncPixivPastTagsBtn.textContent = "同步中...";
+      try {
+        const res = await fetch("/api/submissions/sync-pixiv-past-tags", {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (res.ok) {
+          state.tagSuggestions.preset = data.tags || [];
+          renderPixivMetadataUI();
+          showNotice(`已成功从 Pixiv 同步 ${data.count} 个常用标签！`, "info");
+        } else {
+          showNotice(data.detail?.message || data.detail || "同步常用标签失败", "error");
+        }
+      } catch (err) {
+        showNotice(`同步常用标签失败: ${err.message}`, "error");
+      } finally {
+        elements.syncPixivPastTagsBtn.disabled = false;
+        elements.syncPixivPastTagsBtn.textContent = "🔄 从Pixiv同步";
+      }
+    });
+  }
+
   elements.newSubmissionBtn.addEventListener("click", () => {
     resetSubmissionEditor();
   });
@@ -2085,6 +2892,9 @@
   });
 
   elements.submissionForm.addEventListener("submit", handleSubmissionSubmit);
+  if (elements.deleteSubmissionBtn) {
+    elements.deleteSubmissionBtn.addEventListener("click", handleDeleteSubmission);
+  }
 
   elements.startExportBtn.addEventListener("click", handleStartExport);
   elements.openExportDirBtn.addEventListener("click", handleOpenExportDir);
@@ -2109,6 +2919,7 @@
   });
 
   // Pro Lightbox 事件绑定
+  initMosaicEditor();
   if (elements.lightboxModeTabs) {
     elements.lightboxModeTabs.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-lb-tab]");
@@ -2226,6 +3037,33 @@
   // 打开所在文件夹
   if (elements.lightboxRevealBtn) {
     elements.lightboxRevealBtn.addEventListener("click", async () => {
+      // 1. 如果当前查看的是导出成品图
+      if (state.lightbox.isExported && state.lightbox.exportItem) {
+        const taskId = state.currentSubmission?.task_id || state.latestBuildData?.task_id;
+        const tabName = state.lightbox.exportTabName || "all";
+        const filename = state.lightbox.exportItem.filename;
+        if (!taskId || !filename) {
+          showNotice("无法定位导出文件", "warning");
+          return;
+        }
+        try {
+          const res = await fetch(
+            `/api/submissions/${encodeURIComponent(taskId)}/build-images/${encodeURIComponent(tabName)}/${encodeURIComponent(filename)}/reveal`,
+            { method: "POST" }
+          );
+          if (res.ok) {
+            showNotice("已在资源管理器中定位导出成品文件", "info");
+          } else {
+            const err = await res.json().catch(() => ({}));
+            showNotice(err.detail || "打开文件夹失败", "error");
+          }
+        } catch (err) {
+          showNotice(`打开文件失败: ${err.message}`, "error");
+        }
+        return;
+      }
+
+      // 2. 如果当前查看的是素材库原图
       const aid = state.lightbox.activeAssetId;
       if (!aid) return;
       try {

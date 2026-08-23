@@ -188,3 +188,26 @@ def test_builder_isolates_latest_and_archives_old_builds_to_history(tmp_path: Pa
     assert (history_builds[0] / "selection_snapshot.json").is_file()
 
 
+def test_builder_falls_back_post_and_cover_when_empty(tmp_path: Path):
+    root = tmp_path / "publish"
+    paths, _, _ = init_workspace(root)
+    task_paths = TaskPaths.from_workspace(paths, "task-fallback")
+    TaskRepository.create(task_paths, title="fallback test")
+    img_a = _image(tmp_path / "a.png", "red")
+    img_b = _image(tmp_path / "b.png", "blue")
+    shutil.copy2(img_a, task_paths.selection_dirs["all"] / "0001_a.png")
+    shutil.copy2(img_b, task_paths.selection_dirs["all"] / "0002_b.png")
+    # post 与 cover 目录均为空
+
+    builder = PackageBuilder()
+    result = builder.build(root, "task-fallback")
+
+    # 验证在构建产物中，post 自动补齐为 all (2张)，cover 自动取 post[0] (1张)
+    assert (result.output_paths["all"] / "0001_a.png").is_file()
+    assert (result.output_paths["all"] / "0002_b.png").is_file()
+    assert (result.output_paths["post"] / "0001_a.png").is_file()
+    assert (result.output_paths["post"] / "0002_b.png").is_file()
+    assert (result.output_paths["cover"] / "0001_a.png").is_file()
+    assert not (result.output_paths["cover"] / "0002_b.png").exists()
+
+

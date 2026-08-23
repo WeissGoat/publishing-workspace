@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 月度计划</title>
-  <link rel="stylesheet" href="/calendar.css?v=20260821-1">
+  <link rel="stylesheet" href="/calendar.css?v=20260823-1">
 </head>
 <body>
   <main class="app-shell">
@@ -83,10 +83,101 @@
             <button id="delete-entry" class="danger-button" type="button" disabled>删除</button>
           </div>
         </form>
+
+        <!-- 投稿详情卡片预览模块 -->
+        <div id="submission-detail-card" class="submission-detail-card hidden">
+          <div class="detail-card-divider"></div>
+          <div class="detail-card-header">
+            <div class="detail-header-left">
+              <span class="detail-badge-pill">投稿详情</span>
+              <h3 id="detail-task-title" class="detail-task-title"></h3>
+            </div>
+            <div class="detail-header-actions" style="display:inline-flex;align-items:center;gap:8px;">
+              <button id="detail-delete-submission-btn" class="danger-button compact-button" type="button" title="彻底删除此投稿任务">🗑️ 删除投稿</button>
+              <a id="detail-open-library-btn" href="#" class="detail-action-link" title="在素材库中打开与编辑">
+                <span>进入素材库</span> &rarr;
+              </a>
+            </div>
+          </div>
+
+          <div class="detail-meta-row">
+            <span id="detail-task-id" class="detail-id-tag"></span>
+            <span id="detail-export-status" class="detail-status-tag">未导出</span>
+          </div>
+
+          <!-- 1. 选集素材预览 -->
+          <div class="detail-sub-section">
+            <div class="detail-section-title">
+              <span>📁 选集素材 (Source)</span>
+            </div>
+            <div class="detail-sets-tabs" role="tablist">
+              <button class="detail-tab active" type="button" data-detail-tab="all">
+                all <span id="detail-count-all" class="detail-tab-count">0</span>
+              </button>
+              <button class="detail-tab" type="button" data-detail-tab="post">
+                post <span id="detail-count-post" class="detail-tab-count">0</span>
+              </button>
+              <button class="detail-tab" type="button" data-detail-tab="cover">
+                cover <span id="detail-count-cover" class="detail-tab-count">0</span>
+              </button>
+            </div>
+            <div id="detail-thumbs-container" class="detail-thumbs-grid"></div>
+          </div>
+
+          <!-- 2. 导出构建成品预览 -->
+          <div id="detail-build-section" class="detail-sub-section hidden">
+            <div class="detail-section-title">
+              <span>📦 导出成品 (Build Output)</span>
+              <div style="display:inline-flex;align-items:center;gap:8px;margin-left:auto;">
+                <small id="detail-build-time" class="detail-build-time"></small>
+                <button id="detail-open-build-dir-btn" class="secondary-button compact-button" type="button" title="在资源管理器中打开当前导出的文件夹">📁 打开导出目录</button>
+              </div>
+            </div>
+            <div class="detail-sets-tabs build-tabs" role="tablist">
+              <button class="detail-build-tab active" type="button" data-build-tab="all">
+                all <span id="detail-build-count-all" class="detail-tab-count">0</span>
+              </button>
+              <button class="detail-build-tab" type="button" data-build-tab="post">
+                post <span id="detail-build-count-post" class="detail-tab-count">0</span>
+              </button>
+              <button class="detail-build-tab" type="button" data-build-tab="cover">
+                cover <span id="detail-build-count-cover" class="detail-tab-count">0</span>
+              </button>
+            </div>
+            <div id="detail-build-thumbs-container" class="detail-thumbs-grid"></div>
+            <div id="detail-export-downloads" class="detail-downloads-box"></div>
+          </div>
+
+          <!-- 未导出提示 -->
+          <div id="detail-no-build-box" class="detail-no-build-box hidden">
+            <span>📦 该任务尚未导出构建产物</span>
+          </div>
+        </div>
       </aside>
     </section>
   </main>
 
-  <script src="/calendar.js?v=20260821-1" defer></script>
+  <!-- 全屏 Lightbox 大图预览 -->
+  <dialog id="preview-dialog" class="preview-dialog">
+    <div class="lightbox-modal">
+      <div class="lightbox-header">
+        <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
+        <span id="lightbox-caption" class="lightbox-caption"></span>
+        <div class="lightbox-actions-right">
+          <button id="lightbox-reveal-btn" class="lightbox-action-btn" type="button" title="在 Windows 资源管理器中打开并高亮选中文件">📂 打开所在文件夹</button>
+          <button id="close-preview" class="dialog-close" type="button" title="关闭预览" aria-label="关闭预览">&#10005;</button>
+        </div>
+      </div>
+      <div class="lightbox-body">
+        <button id="lightbox-prev" class="lightbox-nav-btn prev" type="button" title="上一张">&#8249;</button>
+        <div class="lightbox-img-wrap">
+          <img id="preview-image" alt="素材大图预览">
+        </div>
+        <button id="lightbox-next" class="lightbox-nav-btn next" type="button" title="下一张">&#8250;</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/calendar.js?v=20260823-35" defer></script>
 </body>
 </html>

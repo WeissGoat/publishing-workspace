@@ -94,15 +94,15 @@ def test_full_two_pages_end_to_end_acceptance(tmp_path: Path):
                 "source_import_id": "import-acceptance",
                 "sets": {
                     "all": asset_ids,
-                    # post/cover 为空，触发自动补齐
+                    # post/cover 为空，保存时保持原样，导出时才自动补齐
                 },
             },
         )
         assert sub_resp.status_code == 200
         sub_data = sub_resp.json()
         task_id = sub_data["task_id"]
-        assert sub_data["sets"]["post"] == asset_ids
-        assert sub_data["sets"]["cover"] == [asset_ids[0]]
+        assert sub_data["sets"]["post"] == []
+        assert sub_data["sets"]["cover"] == []
         assert sub_data["revision"] == 1
 
         # 确认磁盘生成了 tasks/<task_id>/submission.yaml 和 task.yaml

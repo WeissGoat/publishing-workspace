@@ -21,6 +21,17 @@ class SubmissionRevisionConflictError(RuntimeError):
     """投稿 revision 发生冲突。"""
 
 
+class PixivMetadata(BaseModel):
+    """Pixiv 投稿元数据配置。"""
+
+    title: str = ""
+    caption: str = ""
+    tags: list[str] = Field(default_factory=list)
+    suggested_tags: list[str] = Field(default_factory=list)
+    r18: bool = True
+    allow_tag_edit: bool = True
+
+
 class Submission(BaseModel):
     """Submission 数据模型，对应 submission.yaml。"""
 
@@ -36,6 +47,7 @@ class Submission(BaseModel):
     revision: int = Field(default=1, ge=1)
     source_import_id: str | None = None
     sets: dict[SelectionName, list[NonEmptyText]]
+    pixiv: PixivMetadata | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
     last_export: dict[str, Any] | None = None
@@ -75,12 +87,6 @@ class Submission(BaseModel):
                     deduped.append(text)
             normalized_sets[name] = deduped
 
-        # 自动补齐 post 与 cover
-        if not normalized_sets["post"] and normalized_sets["all"]:
-            normalized_sets["post"] = list(normalized_sets["all"])
-        if not normalized_sets["cover"] and normalized_sets["post"]:
-            normalized_sets["cover"] = [normalized_sets["post"][0]]
-
         self.sets = normalized_sets  # type: ignore[assignment]
         return self
 
@@ -107,6 +113,7 @@ class SubmissionSummary(BaseModel):
     task_id: NonEmptyText
     title: NonEmptyText
     counts: dict[SelectionName, int]
+    pixiv: PixivMetadata | None = None
     updated_at: str
     scheduled_entries: list[SubmissionScheduleRef] = Field(default_factory=list)
     last_export: dict[str, Any] | None = None

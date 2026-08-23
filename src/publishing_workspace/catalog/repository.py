@@ -697,6 +697,19 @@ class CatalogRepository:
                 )
             return cursor.rowcount
 
+    def remove_posted_marks(self, asset_ids: list[str]) -> int:
+        """移除指定资产的所有 posted 标记（包含 'posted'、'published' 和以 'posted:' 开头的所有标记）。"""
+        clean_aids = [str(aid).strip() for aid in asset_ids if str(aid).strip()]
+        if not clean_aids:
+            return 0
+        with self.connection() as connection:
+            self.initialize()
+            cursor = connection.executemany(
+                "DELETE FROM asset_marks WHERE asset_id=? AND (mark='posted' OR mark='published' OR mark LIKE 'posted:%')",
+                [(aid,) for aid in clean_aids],
+            )
+            return cursor.rowcount
+
     def all_asset_marks(self) -> dict[str, list[str]]:
         """获取所有资产的标记映射 {asset_id: [mark1, mark2, ...]}。"""
         result: dict[str, list[str]] = {}

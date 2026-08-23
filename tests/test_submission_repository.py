@@ -38,8 +38,8 @@ def test_submission_repository_save_and_load(tmp_path: Path):
     assert loaded.submission_id == "task-1"
     assert loaded.title == "初始投稿"
     assert loaded.sets["all"] == ["sha256:a", "sha256:b"]
-    assert loaded.sets["post"] == ["sha256:a", "sha256:b"]
-    assert loaded.sets["cover"] == ["sha256:a"]
+    assert loaded.sets["post"] == []
+    assert loaded.sets["cover"] == []
 
 
 def test_submission_repository_rejects_revision_conflict(tmp_path: Path):

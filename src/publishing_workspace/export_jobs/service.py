@@ -51,9 +51,9 @@ class ExportJobService:
                     enabled=bool(enable_mosaic),
                     adapter="anr_plugin_auto_mosaics",
                     options={
-                        "detector": "yolo",
+                        "detector": "yolo_sam",
                         "method": "pixel",
-                        "parts": ["female_nipple", "penis", "pussy"],
+                        "parts": ["penis", "pussy"],
                     },
                 )
                 TaskRepository.save(task_paths, task_config)

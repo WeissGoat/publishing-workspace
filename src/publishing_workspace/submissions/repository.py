@@ -132,15 +132,13 @@ class SubmissionRepository:
     ) -> SubmissionSummary | None:
         submission = cls.load(paths)
         if submission is not None:
-            counts: dict[SelectionName, int] = {
-                name: len(submission.sets.get(name, []))  # type: ignore[arg-type]
-                for name in ("all", "post", "cover")
-            }
+            counts = {name: len(submission.sets.get(name, [])) for name in ("all", "post", "cover")}
             return SubmissionSummary(
                 submission_id=submission.submission_id,
                 task_id=submission.task_id,
                 title=submission.title,
                 counts=counts,
+                pixiv=submission.pixiv,
                 updated_at=submission.updated_at,
                 scheduled_entries=scheduled_entries,
                 last_export=submission.last_export,

@@ -27,9 +27,9 @@ class ProcessingConfig(BaseModel):
                 enabled=False,
                 adapter="anr_plugin_auto_mosaics",
                 options={
-                    "detector": "yolo",
-                    "method": "pixelate",
-                    "parts": ["nipples", "penis", "pussy"],
+                    "detector": "yolo_sam",
+                    "method": "pixel",
+                    "parts": ["penis", "pussy"],
                 },
             ),
         }

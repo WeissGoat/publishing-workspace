@@ -68,6 +68,34 @@ class PackageBuilder:
         if not selections["all"]:
             raise ValueError("all 选择集合为空，无法构建投稿包")
 
+        from ..tasks.models import SelectionFile
+        # 导出阶段的自动补齐与回退处理：
+        # 1. 若 post 选集为空，导出时默认回退使用 all 选集
+        if not selections["post"]:
+            selections["post"] = [
+                SelectionFile(
+                    selection="post",
+                    filename=item.filename,
+                    relative_path=item.relative_path,
+                    absolute_path=item.absolute_path,
+                    content_sha256=item.content_sha256,
+                )
+                for item in selections["all"]
+            ]
+
+        # 2. 若 cover 选集为空，导出时默认取 post[0]
+        if not selections["cover"] and selections["post"]:
+            first_post = selections["post"][0]
+            selections["cover"] = [
+                SelectionFile(
+                    selection="cover",
+                    filename=first_post.filename,
+                    relative_path=first_post.relative_path,
+                    absolute_path=first_post.absolute_path,
+                    content_sha256=first_post.content_sha256,
+                )
+            ]
+
         total_items = sum(len(items) for items in selections.values())
         if progress is not None:
             progress(

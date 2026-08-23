@@ -12,11 +12,17 @@ from ..catalog.repository import CatalogRepository
 from ..config import PublishingWorkspaceConfig, WorkspacePaths, load_workspace
 from ..logging import get_logger
 from ..models import AssetRecord, ImportedItem, SelectionSet, utc_now_iso
+from ..plans.models import InlineContent, TaskContent
+from ..plans.paths import PlanPaths
+from ..plans.repository import PlanRepository
+from ..plans.search import clear_search_caches
 from ..tasks.models import TaskConfig
 from ..tasks.paths import TaskPaths
 from ..tasks.repository import TaskRepository
+from ..tasks.scanner import CurrentSelectionScanner
 from ..tasks.selection import SelectionMaterializer, SelectionSnapshotWriter
 from .models import (
+    PixivMetadata,
     SelectionName,
     Submission,
     SubmissionDetail,
@@ -77,6 +83,7 @@ class SubmissionService:
         title: str,
         source_import_id: str | None,
         sets: dict[str, list[str]],
+        pixiv: PixivMetadata | dict[str, Any] | None = None,
         expected_revision: int | None = None,
     ) -> SubmissionDetail:
         """创建或更新投稿，并在 tasks/<task_id> 下立即物化素材和配置文件。"""
@@ -92,16 +99,12 @@ class SubmissionService:
         if not clean_all:
             raise ValueError("all 集合不能为空")
 
-        # 自动补齐 post 与 cover
+        # 用户指定的 post 与 cover（保存时保持原样，不自动补齐）
         raw_post = sets.get("post", []) if isinstance(sets, dict) else []
         clean_post = [str(x).strip() for x in raw_post if str(x).strip()]
-        if not clean_post:
-            clean_post = list(clean_all)
 
         raw_cover = sets.get("cover", []) if isinstance(sets, dict) else []
         clean_cover = [str(x).strip() for x in raw_cover if str(x).strip()]
-        if not clean_cover:
-            clean_cover = [clean_post[0]]
 
         clean_import_id = str(source_import_id).strip() if source_import_id is not None else None
         if not clean_import_id:
@@ -149,6 +152,16 @@ class SubmissionService:
         if unavailable_ids:
             raise FileNotFoundError(f"素材文件不存在或不可读：{unavailable_ids}")
 
+        # 解析 pixiv 元数据
+        pixiv_meta: PixivMetadata | None = None
+        if pixiv is not None:
+            if isinstance(pixiv, PixivMetadata):
+                pixiv_meta = pixiv
+            elif isinstance(pixiv, dict):
+                pixiv_meta = PixivMetadata.model_validate(pixiv)
+        elif not is_new and existing_submission is not None:
+            pixiv_meta = existing_submission.pixiv
+
         submission = Submission(
             submission_id=target_task_id,
             task_id=target_task_id,
@@ -160,6 +173,7 @@ class SubmissionService:
                 "post": clean_post,
                 "cover": clean_cover,
             },
+            pixiv=pixiv_meta,
             created_at=created_at,
             updated_at=utc_now_iso(),
             last_export=last_export,
@@ -229,9 +243,9 @@ class SubmissionService:
                             update={
                                 "adapter": "anr_plugin_auto_mosaics",
                                 "options": mosaic_op.options or {
-                                    "detector": "yolo",
+                                    "detector": "yolo_sam",
                                     "method": "pixel",
-                                    "parts": ["female_nipple", "penis", "pussy"],
+                                    "parts": ["penis", "pussy"],
                                 },
                             }
                         )
@@ -248,6 +262,29 @@ class SubmissionService:
                 shutil.rmtree(old_selection_backup, ignore_errors=True)
             if staging_root.exists():
                 shutil.rmtree(staging_root, ignore_errors=True)
+
+            # 如果是编辑既有投稿且移除了部分图片，检查移除的图片是否不再被其他投稿引用，若是则自动清理 posted 标记
+            if existing_submission is not None:
+                old_aids = set()
+                for s_name in ("all", "post", "cover"):
+                    for aid in existing_submission.sets.get(s_name, []):
+                        if aid and str(aid).strip():
+                            old_aids.add(str(aid).strip())
+                new_aids = set()
+                for s_name in ("all", "post", "cover"):
+                    for aid in submission.sets.get(s_name, []):
+                        if aid and str(aid).strip():
+                            new_aids.add(str(aid).strip())
+                removed_aids = old_aids - new_aids
+                if removed_aids:
+                    img_exts = {ext.casefold() for ext in workspace_config.image_extensions}
+                    referenced_elsewhere = _find_referenced_asset_ids(paths, extensions=img_exts)
+                    orphaned = [aid for aid in removed_aids if aid not in referenced_elsewhere]
+                    if orphaned:
+                        catalog_repo.remove_posted_marks(orphaned)
+
+            # 清理全局缓存
+            clear_search_caches()
 
         except BaseException:
             # 完整事务回滚
@@ -349,6 +386,118 @@ class SubmissionService:
         """列出所有投稿摘要。"""
         paths, _ = load_workspace(root)
         return SubmissionRepository.list(paths)
+
+    def delete(self, root: str | Path, task_id: str) -> dict[str, Any]:
+        """删除投稿任务及其选集/构建产物，同步移除月度计划中的引用，并自动清理不再被任何投稿引用的图片的已投稿标记。"""
+        paths, workspace_config = load_workspace(root)
+        clean_task_id = str(task_id or "").strip()
+        task_paths = TaskPaths.from_workspace(paths, clean_task_id)
+        if not task_paths.task_root.is_dir():
+            raise FileNotFoundError(f"投稿任务不存在：{clean_task_id}")
+
+        extensions = {ext.casefold() for ext in workspace_config.image_extensions}
+
+        # 1. 收集被删除任务所包含的全部素材 ID
+        target_asset_ids: set[str] = set()
+        submission = SubmissionRepository.load(task_paths)
+        if submission is not None:
+            for s_name in ("all", "post", "cover"):
+                for aid in submission.sets.get(s_name, []):
+                    if aid and str(aid).strip():
+                        target_asset_ids.add(str(aid).strip())
+
+        if task_paths.selection_root.is_dir():
+            sels = CurrentSelectionScanner().scan(task_paths, extensions)
+            for sel_name, items in sels.items():
+                for it in items:
+                    target_asset_ids.add(f"sha256:{it.content_sha256}")
+
+        # 2. 删除 tasks/<task_id> 目录
+        shutil.rmtree(task_paths.task_root, ignore_errors=True)
+
+        # 3. 从月度计划中清除对此任务的引用
+        if paths.plans.is_dir():
+            plan_repo = PlanRepository()
+            for plan_yaml in sorted(paths.plans.glob("*/plan.yaml")):
+                month = plan_yaml.parent.name
+                plan_paths = PlanPaths.from_workspace(paths, month)
+                try:
+                    plan = plan_repo.load(plan_paths)
+                    orig_len = len(plan.entries)
+                    remaining_entries = [
+                        e
+                        for e in plan.entries
+                        if not (isinstance(e.content, TaskContent) and e.content.task_id == clean_task_id)
+                    ]
+                    if len(remaining_entries) != orig_len:
+                        plan.entries = remaining_entries
+                        plan.revision += 1
+                        plan_repo.save(plan_paths, plan)
+                except Exception as exc:
+                    logger.warning("删除投稿时同步清理月度计划失败：%s：%s", plan_yaml, exc)
+
+        # 4. 计算剩余任务与计划引用的资产，找出变成孤立的资产
+        remaining_referenced = _find_referenced_asset_ids(paths, extensions=extensions)
+        unmarked_aids = [aid for aid in target_asset_ids if aid not in remaining_referenced]
+
+        # 5. 从 Catalog 中清除孤立资产的 posted 标记
+        if unmarked_aids:
+            catalog_repo = self._get_catalog_repo(paths)
+            catalog_repo.remove_posted_marks(unmarked_aids)
+
+        # 6. 清除内存全局缓存
+        clear_search_caches()
+
+        return {
+            "deleted_task_id": clean_task_id,
+            "unmarked_asset_ids": unmarked_aids,
+        }
+
+
+def _find_referenced_asset_ids(
+    paths: WorkspacePaths,
+    exclude_task_id: str | None = None,
+    extensions: set[str] | None = None,
+) -> set[str]:
+    """收集当前工作区中所有投稿与月度计划所引用的全部素材 ID。"""
+    referenced: set[str] = set()
+    img_exts = extensions or {".png", ".jpg", ".jpeg", ".webp"}
+
+    # 1. 扫描所有 tasks
+    if paths.tasks.is_dir():
+        for task_dir in paths.tasks.iterdir():
+            if not task_dir.is_dir() or (exclude_task_id and task_dir.name == exclude_task_id):
+                continue
+            task_paths = TaskPaths.from_workspace(paths, task_dir.name)
+            sub = SubmissionRepository.load(task_paths)
+            if sub is not None:
+                for s_name in ("all", "post", "cover"):
+                    for aid in sub.sets.get(s_name, []):
+                        if aid and str(aid).strip():
+                            referenced.add(str(aid).strip())
+            elif task_paths.selection_root.is_dir():
+                sels = CurrentSelectionScanner().scan(task_paths, img_exts)
+                for s_name, items in sels.items():
+                    for it in items:
+                        referenced.add(f"sha256:{it.content_sha256}")
+
+    # 2. 扫描所有月度计划
+    if paths.plans.is_dir():
+        plan_repo = PlanRepository()
+        for plan_yaml in sorted(paths.plans.glob("*/plan.yaml")):
+            month = plan_yaml.parent.name
+            try:
+                plan = plan_repo.load(PlanPaths.from_workspace(paths, month))
+                for entry in plan.entries:
+                    if isinstance(entry.content, InlineContent):
+                        for s_list in entry.content.sets.values():
+                            for aid in s_list:
+                                if aid and str(aid).strip():
+                                    referenced.add(str(aid).strip())
+            except Exception:
+                continue
+
+    return referenced
 
 
 def _sha256(path: Path) -> str:

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260823-26">
+  <link rel="stylesheet" href="/library.css?v=20260823-36">
 </head>
 <body>
   <main class="app-shell">
@@ -222,6 +222,70 @@
             </div>
           </div>
 
+          <!-- 🎨 Pixiv 投稿设定卡片 -->
+          <div class="pixiv-meta-card">
+            <div class="pixiv-card-header">
+              <strong class="pixiv-header-title">🎨 Pixiv 投稿设定</strong>
+              <button id="pixiv-auto-btn" class="text-button compact-btn" type="button" title="根据当前选择的素材重新生成标题与推荐标签">✨ 重新生成</button>
+            </div>
+
+            <!-- Pixiv 描述 -->
+            <label class="field-label" for="pixiv-caption" style="margin-top:6px;">Pixiv 描述 (Caption)</label>
+            <textarea id="pixiv-caption" class="field-control pixiv-caption-input" rows="2" placeholder="Hi there!..."></textarea>
+
+            <!-- Pixiv 属性勾选 -->
+            <div class="pixiv-flags-row">
+              <label class="pixiv-checkbox-label">
+                <input type="checkbox" id="pixiv-r18" checked>
+                <span>R-18</span>
+              </label>
+              <label class="pixiv-checkbox-label">
+                <input type="checkbox" id="pixiv-allow-tag-edit" checked>
+                <span>允许他人编辑标签</span>
+              </label>
+            </div>
+
+            <!-- Pixiv 标签管理 -->
+            <div class="pixiv-tags-section">
+              <div class="pixiv-tags-header">
+                <span class="field-label" style="margin-bottom:0;">已选标签 <span id="pixiv-tags-count" class="tag-counter">(0/10)</span></span>
+                <button id="clear-pixiv-tags-btn" class="text-button" type="button" style="font-size:11px;">清空</button>
+              </div>
+              <div id="pixiv-selected-tags" class="pixiv-selected-tags-box"></div>
+
+              <div class="pixiv-tag-input-row">
+                <input id="pixiv-custom-tag-input" class="field-control" type="text" placeholder="输入标签按回车添加">
+                <button id="add-pixiv-custom-tag-btn" class="secondary-button compact-button" type="button">添加</button>
+              </div>
+
+              <!-- 推荐标签候选池 -->
+              <div class="pixiv-recommend-pool">
+                <div class="recommend-cat-group">
+                  <div class="recommend-cat-header-row">
+                    <span class="recommend-cat-title">📌 预设常用标签</span>
+                    <button id="sync-pixiv-past-tags-btn" class="text-button" type="button" style="font-size:11px;" title="根据配置的 Pixiv Cookie 重新同步账号最新常用标签">🔄 从Pixiv同步</button>
+                  </div>
+                  <div id="recommend-preset-tags" class="recommend-chips-wrap"></div>
+                </div>
+                <div class="recommend-cat-group">
+                  <div class="recommend-cat-title">👤 角色标签</div>
+                  <div id="recommend-char-tags" class="recommend-chips-wrap"></div>
+                </div>
+                <div class="recommend-cat-group">
+                  <div class="recommend-cat-title">🎬 动作/场景</div>
+                  <div id="recommend-action-tags" class="recommend-chips-wrap"></div>
+                </div>
+                <div class="recommend-cat-group">
+                  <div class="recommend-cat-header-row">
+                    <span class="recommend-cat-title">✨ Pixiv 识别推荐</span>
+                    <button id="fetch-pixiv-online-tags-btn" class="text-button" type="button" style="font-size:11px;" title="上传当前首张图片到 Pixiv API 获取识别推荐">🔍 图片识别</button>
+                  </div>
+                  <div id="recommend-pixiv-online-tags" class="recommend-chips-wrap"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div id="submission-meta-row" class="submission-meta-row">
             <span id="submission-task-badge" class="meta-badge">未生成任务</span>
             <span id="submission-rev-badge" class="meta-badge">Rev 1</span>
@@ -236,13 +300,13 @@
               </div>
               <button id="clear-current-set-btn" class="text-button compact-clear-set" type="button" title="清空当前集合">清空当前集</button>
             </div>
-            <small class="helper-text">post 默认自动补齐 all，cover 默认取 post[0]。</small>
           </div>
 
           <div id="set-items-container" class="set-items-container"></div>
 
           <div class="submission-form-actions">
             <button id="save-submission-btn" class="primary-button" type="submit">💾 保存投稿 (生成 Task)</button>
+            <button id="delete-submission-btn" class="danger-button hidden" type="button" title="删除当前投稿任务及选集与导出产物">🗑️ 删除投稿</button>
           </div>
         </form>
 
@@ -346,9 +410,21 @@
           <button id="lightbox-next-btn" class="lightbox-nav-btn next" type="button" title="下一张 (→)">&#10095;</button>
         </div>
 
-        <!-- 🎨 图片编辑与手动打码工作台（Painterro 挂载区） -->
+        <!-- 🎨 马赛克画笔编辑工作台 -->
         <div id="lightbox-editor-area" class="lightbox-editor-area hidden">
-          <div id="painterro-container" class="painterro-container"></div>
+          <div class="mosaic-toolbar">
+            <label class="mosaic-control">🖌️ 粗细 <input type="range" id="mosaic-brush-size" min="8" max="80" value="28"> <span id="mosaic-brush-size-val">28</span></label>
+            <label class="mosaic-control">▦ 强度 <input type="range" id="mosaic-block-size" min="4" max="32" value="12"> <span id="mosaic-block-size-val">12</span></label>
+            <span class="mosaic-sep"></span>
+            <button type="button" id="mosaic-undo-btn" class="mosaic-btn" disabled title="撤销 (Ctrl+Z)">↶ 撤销</button>
+            <button type="button" id="mosaic-redo-btn" class="mosaic-btn" disabled title="重做 (Ctrl+Y)">↷ 重做</button>
+            <span class="mosaic-sep"></span>
+            <button type="button" id="mosaic-save-btn" class="mosaic-btn mosaic-btn-primary">💾 保存到发布包</button>
+          </div>
+          <div id="mosaic-canvas-wrap" class="mosaic-canvas-wrap">
+            <canvas id="mosaic-canvas-main"></canvas>
+            <canvas id="mosaic-canvas-cursor"></canvas>
+          </div>
         </div>
 
         <!-- 右侧元数据与定制详情侧栏 -->
@@ -433,7 +509,6 @@
     </div>
   </dialog>
 
-  <script src="/vendor/painterro.min.js"></script>
-  <script src="/library.js?v=20260823-29" defer></script>
+  <script src="/library.js?v=20260824-37" defer></script>
 </body>
 </html>
