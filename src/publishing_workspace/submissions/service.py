@@ -212,10 +212,8 @@ class SubmissionService:
             )
             SelectionSnapshotWriter().write_candidates(staged_paths, all_selection_set)
 
-            # 原子替换 selection 目录
-            if task_paths.selection_root.exists():
-                os.replace(task_paths.selection_root, old_selection_backup)
-            os.replace(staged_paths.selection_root, task_paths.selection_root)
+            # 安全替换 selection 目录（支持 Windows 句柄占用回退）
+            _safe_replace_dir(staged_paths.selection_root, task_paths.selection_root, old_selection_backup)
             selection_swapped = True
 
             # 创建或更新 task.yaml（只更新 title，不覆盖 processing/packages）
@@ -224,6 +222,19 @@ class SubmissionService:
             else:
                 try:
                     existing_task_config = TaskRepository.load(task_paths)
+                    # 确保 mosaic 算子拥有规范的 adapter 和 options
+                    mosaic_op = existing_task_config.processing.operations.get("mosaic")
+                    if mosaic_op and not mosaic_op.adapter:
+                        existing_task_config.processing.operations["mosaic"] = mosaic_op.model_copy(
+                            update={
+                                "adapter": "anr_plugin_auto_mosaics",
+                                "options": mosaic_op.options or {
+                                    "detector": "yolo",
+                                    "method": "pixel",
+                                    "parts": ["female_nipple", "penis", "pussy"],
+                                },
+                            }
+                        )
                     task_config = existing_task_config.model_copy(update={"title": clean_title})
                 except Exception:
                     task_config = TaskConfig(task_id=target_task_id, title=clean_title)
@@ -241,10 +252,8 @@ class SubmissionService:
         except BaseException:
             # 完整事务回滚
             if selection_swapped:
-                if task_paths.selection_root.exists():
-                    shutil.rmtree(task_paths.selection_root, ignore_errors=True)
                 if old_selection_backup.exists():
-                    os.replace(old_selection_backup, task_paths.selection_root)
+                    _safe_replace_dir(old_selection_backup, task_paths.selection_root, staging_root / ".rollback_tmp")
             else:
                 if old_selection_backup.exists():
                     shutil.rmtree(old_selection_backup, ignore_errors=True)
@@ -348,3 +357,31 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _safe_replace_dir(source: Path, target: Path, backup: Path) -> None:
+    """原子重命名目录，若 Windows 下遇到目录句柄锁定则安全回退到内容同步。"""
+    try:
+        if target.exists():
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            os.replace(target, backup)
+        os.replace(source, target)
+    except (PermissionError, OSError):
+        target.mkdir(parents=True, exist_ok=True)
+        # 清理旧子项
+        for sub in list(target.iterdir()):
+            if sub.is_file():
+                try:
+                    sub.unlink()
+                except Exception:
+                    pass
+            elif sub.is_dir():
+                shutil.rmtree(sub, ignore_errors=True)
+        # 复制新子项
+        for sub in source.iterdir():
+            if sub.is_file():
+                shutil.copy2(sub, target / sub.name)
+            elif sub.is_dir():
+                shutil.copytree(sub, target / sub.name, dirs_exist_ok=True)
+

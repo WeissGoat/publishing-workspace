@@ -127,6 +127,7 @@
     saveSubmissionBtn: document.getElementById("save-submission-btn"),
 
     startExportBtn: document.getElementById("start-export-btn"),
+    exportMosaicToggle: document.getElementById("export-mosaic-toggle"),
     exportProgressBox: document.getElementById("export-progress-box"),
     progressBarFill: document.getElementById("progress-bar-fill"),
     progressPhase: document.getElementById("progress-phase"),
@@ -1484,6 +1485,14 @@
           `;
           elements.pipelineOpsList.appendChild(item);
         }
+
+        // 同步打码开关状态
+        if (elements.exportMosaicToggle) {
+          const mosaicOp = ops.find(op => op.name === "mosaic");
+          if (mosaicOp) {
+            elements.exportMosaicToggle.checked = mosaicOp.enabled;
+          }
+        }
       }
 
       // 3. Zip 归档下载
@@ -1591,9 +1600,13 @@
     clearNotice();
     resetExportUI();
 
+    const enableMosaic = elements.exportMosaicToggle ? elements.exportMosaicToggle.checked : true;
+
     try {
       const res = await fetch(`/api/submissions/${encodeURIComponent(taskId)}/exports`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enable_mosaic: enableMosaic }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));

@@ -738,8 +738,28 @@ input[type="search"]::-webkit-search-results-decoration {
 .submission-form-actions button { width: 100%; }
 
 /* 导出模块 */
-.export-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
-.export-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.export-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.export-options-bar {
+  margin-bottom: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.mosaic-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #1e293b;
+  cursor: pointer;
+  user-select: none;
+}
+.mosaic-checkbox-label input[type="checkbox"] {
+  accent-color: #2563eb;
+  cursor: pointer;
+}
 .export-progress-box { padding: 10px; border: 1px solid #c9ded7; border-radius: 4px; background: #edf6f3; margin-top: 8px; }
 .progress-bar-wrap { width: 100%; height: 8px; background: #d7e8e2; border-radius: 4px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: var(--accent); transition: width .2s ease; }

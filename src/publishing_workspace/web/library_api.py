@@ -267,7 +267,37 @@ def register_library_routes(app: FastAPI) -> None:
 
     # 导出作业相关路由
     @app.post("/api/submissions/{task_id}/exports")
-    def start_task_export(task_id: str):
+    async def start_task_export(task_id: str, req: Request):
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+
+        enable_mosaic = body.get("enable_mosaic")
+        if enable_mosaic is not None:
+            try:
+                from ..config import load_workspace
+                from ..tasks.paths import TaskPaths
+                from ..tasks.repository import TaskRepository
+                from ..tasks.models import OperationConfig
+
+                paths, _ = load_workspace(app.state.publishing_root)
+                task_paths = TaskPaths.from_workspace(paths, task_id)
+                if task_paths.task_yaml.is_file():
+                    task_config = TaskRepository.load(task_paths)
+                    task_config.processing.operations["mosaic"] = OperationConfig(
+                        enabled=bool(enable_mosaic),
+                        adapter="anr_plugin_auto_mosaics",
+                        options={
+                            "detector": "yolo",
+                            "method": "pixel",
+                            "parts": ["female_nipple", "penis", "pussy"],
+                        },
+                    )
+                    TaskRepository.save(task_paths, task_config)
+            except Exception as e:
+                logger.warning("更新任务打码配置失败：%s", e)
+
         try:
             job = app.state.export_jobs.start(app.state.publishing_root, task_id)
             status_code = 202 if job.status == "queued" else 200

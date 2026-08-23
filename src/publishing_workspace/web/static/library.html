@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260823-18">
+  <link rel="stylesheet" href="/library.css?v=20260823-19">
 </head>
 <body>
   <main class="app-shell">
@@ -253,6 +253,13 @@
             <button id="start-export-btn" class="primary-button compact-button" type="button" disabled>开始导出</button>
           </div>
 
+          <div class="export-options-bar">
+            <label class="mosaic-checkbox-label" title="自动检测敏感部位（欧派、私处等）并执行像素打码">
+              <input type="checkbox" id="export-mosaic-toggle" checked>
+              <span>🛡️ 启用 AI 自动打码 (YOLO+Pixel)</span>
+            </label>
+          </div>
+
           <div id="export-progress-box" class="export-progress-box hidden">
             <div class="progress-bar-wrap">
               <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%;"></div>
@@ -414,6 +421,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260823-17" defer></script>
+  <script src="/library.js?v=20260823-19" defer></script>
 </body>
 </html>
