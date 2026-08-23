@@ -832,9 +832,10 @@
     const ratio = item.width && item.height ? `${item.width} / ${item.height}` : "1 / 1";
     const previewUrl = `/api/assets/${encodeURIComponent(item.asset_id)}/preview`;
 
-    const hasUsage = item.usage && item.usage.length > 0;
+    const realUsage = (item.usage || []).filter(u => u !== "favorite");
+    const hasUsage = realUsage.length > 0;
     const usageBadgeHtml = hasUsage
-      ? `<span class="asset-usage-badge" title="已投稿/使用: ${escapeHtml(item.usage.join(", "))}">已投稿</span>`
+      ? `<span class="asset-usage-badge" title="已投稿/使用: ${escapeHtml(realUsage.join(", "))}">已投稿</span>`
       : "";
 
     const isFav = isAssetFavorited(item.asset_id);
@@ -1091,7 +1092,8 @@
     elements.lightboxFavLabel.textContent = isFav ? "已收藏 ⭐" : "收藏 ☆";
 
     const item = state.loadedAssets.get(assetId);
-    const isPosted = serverPosted !== null ? serverPosted : Boolean(item?.usage && item.usage.length > 0);
+    const realUsage = (item?.usage || []).filter(u => u !== "favorite");
+    const isPosted = serverPosted !== null ? serverPosted : realUsage.length > 0;
     elements.lightboxPostedBtn.classList.toggle("active-posted", isPosted);
     elements.lightboxPostedLabel.textContent = isPosted ? "已投稿 📮" : "标记已投稿 📥";
   }
@@ -1866,7 +1868,8 @@
       const aid = state.lightbox.activeAssetId;
       if (!aid) return;
       const item = state.loadedAssets.get(aid);
-      const currentlyPosted = Boolean(item?.usage && item.usage.length > 0);
+      const realUsage = (item?.usage || []).filter(u => u !== "favorite");
+      const currentlyPosted = realUsage.length > 0;
       const nextPosted = !currentlyPosted;
 
       try {
