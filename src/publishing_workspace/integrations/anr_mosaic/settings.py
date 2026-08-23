@@ -68,6 +68,15 @@ class MosaicSettings:
         return tuple(part for part in self.parts if part not in DETECTOR_LABELS)
 
 
+PART_ALIASES = {
+    "nipple": "female_nipple",
+    "nipples": "female_nipple",
+    "female_nipples": "female_nipple",
+    "vagina": "pussy",
+    "dick": "penis",
+}
+
+
 def _parts(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         items = [item.strip() for item in value.split(",")]
@@ -75,7 +84,8 @@ def _parts(value: Any) -> tuple[str, ...]:
         items = [str(item).strip() for item in value]
     else:
         raise ValueError("mosaic.parts 必须是字符串或列表")
-    normalized = tuple(dict.fromkeys(item.casefold() for item in items if item))
+    normalized_items = [PART_ALIASES.get(item.casefold(), item.casefold()) for item in items if item]
+    normalized = tuple(dict.fromkeys(normalized_items))
     if not normalized:
         raise ValueError("mosaic.parts 不能为空")
     unknown = sorted(set(normalized) - SUPPORTED_PARTS)

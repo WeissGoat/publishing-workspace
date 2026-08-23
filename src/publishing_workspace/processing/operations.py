@@ -37,6 +37,11 @@ class MosaicOperation:
     def __init__(self, adapters: dict[str, MosaicAdapter] | None = None):
         self.adapters = adapters or {}
 
+    def _extract_options(self, options: dict[str, Any]) -> dict[str, Any]:
+        if "options" in options and isinstance(options["options"], dict):
+            return dict(options["options"])
+        return {k: v for k, v in options.items() if k != "adapter"}
+
     def validate(self, options: dict[str, Any]) -> None:
         adapter_name = str(options.get("adapter") or "").strip()
         if not adapter_name:
@@ -46,7 +51,7 @@ class MosaicOperation:
 
         validator = getattr(self.adapters[adapter_name], "validate", None)
         if callable(validator):
-            validator(dict(options.get("options") or {}))
+            validator(self._extract_options(options))
 
     def process(
         self,
@@ -56,7 +61,7 @@ class MosaicOperation:
     ) -> None:
         self.validate(options)
         adapter = self.adapters[str(options["adapter"])]
-        adapter.process(input_path, output_path, dict(options.get("options") or {}))
+        adapter.process(input_path, output_path, self._extract_options(options))
 
 
 class OperationRegistry:

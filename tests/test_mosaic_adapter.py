@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import shutil
 from pathlib import Path
 
 import pytest
@@ -137,3 +138,77 @@ def test_package_builder_creates_default_registry_with_mosaic_adapter(tmp_path: 
     result = PackageBuilder().build(root, "task-001")
 
     assert result.output_paths["all"].joinpath("source.png").is_file()
+
+
+def test_package_builder_with_mosaic_pipeline_end_to_end(tmp_path: Path, monkeypatch):
+    import publishing_workspace.integrations.anr_mosaic.adapter as adapter_module
+    import yaml
+
+    class FakeYolo:
+        def __init__(self, model_path: Path):
+            pass
+
+        def create_mask(self, source: Path, target: Path, labels: tuple[str, ...]) -> None:
+            mask = Image.new("L", (16, 16), 0)
+            for x in range(4, 12):
+                for y in range(4, 12):
+                    mask.putpixel((x, y), 255)
+            mask.save(target)
+
+    monkeypatch.setattr(adapter_module, "YoloDetector", FakeYolo)
+
+    root = tmp_path / "publish"
+    paths, _, _ = init_workspace(root)
+
+    # 准备模型文件并写入配置
+    model_data = b"fake_yolo_model_content"
+    config = _config(tmp_path, model_data)
+    model_file = paths.root / "models" / "yolo" / "censor.pt"
+    model_file.parent.mkdir(parents=True, exist_ok=True)
+    model_file.write_bytes(model_data)
+
+    # 更新 workspace.yaml 中的 mosaic 配置
+    ws_data = yaml.safe_load(paths.config.read_text(encoding="utf-8"))
+    ws_data["integrations"]["mosaic"] = config.model_dump(mode="json")
+    paths.config.write_text(yaml.safe_dump(ws_data), encoding="utf-8")
+
+    task_paths = TaskPaths.from_workspace(paths, "task-mosaic-01")
+    TaskRepository.create(task_paths, title="打码测试任务")
+
+    source_img = tmp_path / "raw.png"
+    Image.new("RGB", (16, 16), (255, 0, 0)).save(source_img)
+
+    task_paths.selection_dirs["all"].mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_img, task_paths.selection_dirs["all"] / "0001_raw.png")
+
+    TaskRepository.save(
+        task_paths,
+        TaskConfig(
+            task_id="task-mosaic-01",
+            title="打码测试任务",
+            processing=ProcessingConfig(
+                operations={
+                    "strip_metadata": OperationConfig(enabled=True),
+                    "mosaic": OperationConfig(
+                        enabled=True,
+                        adapter="anr_plugin_auto_mosaics",
+                        options={"detector": "yolo", "method": "solid", "parts": ["penis"]},
+                    ),
+                }
+            ),
+        ),
+    )
+
+    builder = PackageBuilder()
+    result = builder.build(root, "task-mosaic-01")
+
+    # 验证最新构建目录与产物
+    assert result.build_root.name == "latest"
+    output_file = result.output_paths["all"] / "0001_raw.png"
+    assert output_file.is_file()
+
+    # 验证打码效果：打码区变为灰色，非打码区保持红色
+    processed_img = Image.open(output_file)
+    assert processed_img.getpixel((8, 8)) == (128, 128, 128)
+    assert processed_img.getpixel((0, 0)) == (255, 0, 0)
+

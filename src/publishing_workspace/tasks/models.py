@@ -23,7 +23,15 @@ class ProcessingConfig(BaseModel):
     operations: dict[str, OperationConfig] = Field(
         default_factory=lambda: {
             "strip_metadata": OperationConfig(enabled=True),
-            "mosaic": OperationConfig(enabled=False),
+            "mosaic": OperationConfig(
+                enabled=False,
+                adapter="anr_plugin_auto_mosaics",
+                options={
+                    "detector": "yolo",
+                    "method": "pixelate",
+                    "parts": ["nipples", "penis", "pussy"],
+                },
+            ),
         }
     )
 

@@ -62,6 +62,58 @@ def test_mosaic_without_adapter_fails_before_output(tmp_path: Path):
             _image(tmp_path / "source.png"),
             tmp_path / "output.png",
             ProcessingConfig(
-                operations={"mosaic": OperationConfig(enabled=True)},
+                operations={"mosaic": OperationConfig(enabled=True, adapter="missing_adapter")},
             ),
         )
+
+
+def test_pipeline_processes_strip_metadata_and_mosaic_together(tmp_path: Path):
+    from publishing_workspace.processing.operations import default_operation_registry
+
+    class FakeMosaicAdapter:
+        name = "test_mosaic"
+
+        def process(self, source: Path, target: Path, options: dict) -> None:
+            img = Image.open(source).convert("RGB")
+            # 在中心像素涂上灰色作为打码效果
+            img.putpixel((4, 4), (128, 128, 128))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            img.save(target)
+
+    registry = default_operation_registry({"test_mosaic": FakeMosaicAdapter()})
+    pipeline = ImageProcessingPipeline(cache_root=tmp_path / "cache", registry=registry)
+
+    source = _image(
+        tmp_path / "source.png",
+        color="red",
+        text={"prompt": "1girl, anime", "workflow": "{}"},
+    )
+    output = tmp_path / "output.png"
+
+    config = ProcessingConfig(
+        profile="pixiv_mosaic",
+        operations={
+            "strip_metadata": OperationConfig(enabled=True),
+            "mosaic": OperationConfig(
+                enabled=True,
+                adapter="test_mosaic",
+                options={"detector": "yolo", "method": "pixelate"},
+            ),
+        },
+    )
+
+    # 首次处理
+    result1 = pipeline.process(source, output, config)
+    assert result1.cache_hit is False
+    assert result1.processed_operations == ["strip_metadata", "mosaic"]
+    assert result1.skipped_operations == []
+    assert read_png_text_chunks(output) == {}  # 确认 Prompt 已剥离
+    assert Image.open(output).getpixel((4, 4)) == (128, 128, 128)  # 确认已打码
+    assert Image.open(output).getpixel((0, 0)) == (255, 0, 0)  # 确认非打码区保持原色
+
+    # 二次处理（命中缓存）
+    second_output = tmp_path / "output2.png"
+    result2 = pipeline.process(source, second_output, config)
+    assert result2.cache_hit is True
+    assert second_output.read_bytes() == output.read_bytes()
+
