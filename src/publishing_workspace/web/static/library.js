@@ -1486,12 +1486,9 @@
           elements.pipelineOpsList.appendChild(item);
         }
 
-        // 同步打码开关状态
+        // 保持打码复选框默认开启
         if (elements.exportMosaicToggle) {
-          const mosaicOp = ops.find(op => op.name === "mosaic");
-          if (mosaicOp) {
-            elements.exportMosaicToggle.checked = mosaicOp.enabled;
-          }
+          elements.exportMosaicToggle.checked = true;
         }
       }
 

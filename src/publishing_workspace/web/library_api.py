@@ -299,7 +299,7 @@ def register_library_routes(app: FastAPI) -> None:
                 logger.warning("更新任务打码配置失败：%s", e)
 
         try:
-            job = app.state.export_jobs.start(app.state.publishing_root, task_id)
+            job = app.state.export_jobs.start(app.state.publishing_root, task_id, enable_mosaic=enable_mosaic)
             status_code = 202 if job.status == "queued" else 200
             return JSONResponse(
                 status_code=status_code,

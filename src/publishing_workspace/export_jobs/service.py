@@ -35,12 +35,30 @@ class ExportJobService:
         self._lock = threading.Lock()
         self._closed = False
 
-    def start(self, root: str | Path, task_id: str) -> ExportJob:
+    def start(self, root: str | Path, task_id: str, enable_mosaic: bool | None = None) -> ExportJob:
         """启动指定投稿任务的后台导出；若已有排队或运行中的任务，直接复用。"""
         paths, _ = load_workspace(root)
         task_paths = TaskPaths.from_workspace(paths, task_id)
         if not task_paths.task_yaml.is_file():
             raise FileNotFoundError(f"投稿任务不存在：{task_id}")
+
+        if enable_mosaic is not None:
+            try:
+                from ..tasks.repository import TaskRepository
+                from ..tasks.models import OperationConfig
+                task_config = TaskRepository.load(task_paths)
+                task_config.processing.operations["mosaic"] = OperationConfig(
+                    enabled=bool(enable_mosaic),
+                    adapter="anr_plugin_auto_mosaics",
+                    options={
+                        "detector": "yolo",
+                        "method": "pixel",
+                        "parts": ["female_nipple", "penis", "pussy"],
+                    },
+                )
+                TaskRepository.save(task_paths, task_config)
+            except Exception as e:
+                logger.warning("更新任务打码配置失败：%s", e)
 
         with self._lock:
             if self._closed:
