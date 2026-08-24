@@ -2820,6 +2820,113 @@
     });
   }
 
+  async function handlePublishToPixiv(forceRepublish = false) {
+    const sub = state.currentSubmission;
+    if (!sub || !sub.task_id) {
+      showNotice("请先保存投稿任务后再发布到 Pixiv", "warning");
+      return;
+    }
+
+    // 1. 同步当前表单上的标题/简介/标签到 state
+    if (elements.pixivTitleInput && sub.pixiv) {
+      sub.pixiv.title = elements.pixivTitleInput.value.trim();
+    }
+    if (elements.pixivCaptionInput && sub.pixiv) {
+      sub.pixiv.caption = elements.pixivCaptionInput.value.trim();
+    }
+
+    // 2. 标签前置校验与自动补充
+    if (!sub.pixiv || !sub.pixiv.tags || sub.pixiv.tags.length === 0) {
+      if (sub.pixiv && sub.pixiv.suggested_tags && sub.pixiv.suggested_tags.length > 0) {
+        sub.pixiv.tags = sub.pixiv.suggested_tags.slice(0, 10);
+        renderPixivMetadataUI();
+        showNotice("已自动应用推荐标签", "info");
+      } else if (state.tagSuggestions.default_tags && state.tagSuggestions.default_tags.length > 0) {
+        sub.pixiv.tags = state.tagSuggestions.default_tags.slice(0, 10);
+        renderPixivMetadataUI();
+        showNotice("已自动应用默认标签", "info");
+      } else {
+        showNotice("请至少添加 1 个 Pixiv 标签（或点击「图片识别」「拉取常用」）后再发布", "warning");
+        return;
+      }
+    }
+
+    if (sub.pixiv.tags.length > 10) {
+      showNotice("Pixiv 最多允许 10 个标签，发布时将自动截取前 10 个", "warning");
+    }
+
+    if (forceRepublish) {
+      if (!confirm("该投稿已在 Pixiv 发布过，确定要再次上传并创建为新作品吗？")) {
+        return;
+      }
+    }
+
+    if (elements.publishToPixivBtn) {
+      elements.publishToPixivBtn.disabled = true;
+      elements.publishToPixivBtn.textContent = "⏳ 正在上传图片并发布中...";
+    }
+    if (elements.republishToPixivBtn) {
+      elements.republishToPixivBtn.disabled = true;
+    }
+
+    try {
+      // 3. 发布前自动保存投稿配置，确保最新设置落盘
+      const saveRes = await fetch("/api/submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: sub.task_id,
+          title: elements.submissionTitle.value.trim() || sub.title,
+          source_import_id: sub.source_import_id,
+          sets: sub.sets,
+          pixiv: sub.pixiv,
+        }),
+      });
+      if (!saveRes.ok) {
+        console.warn("发布前自动保存投稿失败");
+      }
+
+      // 4. 调用发布 API
+      const res = await fetch(`/api/submissions/${encodeURIComponent(sub.task_id)}/publish/pixiv`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          force_rebuild: false,
+          force_republish: forceRepublish,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.detail || {};
+        const msg = detail.message || (typeof data.detail === "string" ? data.detail : "发布到 Pixiv 失败");
+        throw new Error(msg);
+      }
+
+      if (sub.pixiv) {
+        sub.pixiv.illust_id = data.illust_id;
+        sub.pixiv.published_at = data.published_at;
+        sub.pixiv.last_publish_status = "success";
+      }
+
+      renderPixivMetadataUI();
+      showNotice(`🎉 ${data.message || "发布成功！"}`, "info");
+    } catch (err) {
+      showNotice(`发布到 Pixiv 失败: ${err.message}`, "error");
+      renderPixivMetadataUI();
+    } finally {
+      if (elements.publishToPixivBtn) {
+        elements.publishToPixivBtn.disabled = false;
+        elements.publishToPixivBtn.textContent = sub.pixiv?.illust_id
+          ? `✓ 已发布 (PID: ${sub.pixiv.illust_id})`
+          : "🚀 发布到 Pixiv";
+      }
+      if (elements.republishToPixivBtn) {
+        elements.republishToPixivBtn.disabled = false;
+      }
+    }
+  }
+
   if (elements.pixivCaption) {
     elements.pixivCaption.addEventListener("input", (e) => {
       if (state.currentSubmission.pixiv) {
@@ -2939,61 +3046,7 @@
     });
   }
 
-  async function handlePublishToPixiv(forceRepublish = false) {
-    const sub = state.currentSubmission;
-    if (!sub || !sub.task_id) {
-      showNotice("请先保存投稿任务后再发布到 Pixiv", "warning");
-      return;
-    }
 
-    if (forceRepublish) {
-      if (!confirm("该投稿已在 Pixiv 发布过，确定要再次上传并创建为新作品吗？")) {
-        return;
-      }
-    }
-
-    if (elements.publishToPixivBtn) {
-      elements.publishToPixivBtn.disabled = true;
-      elements.publishToPixivBtn.textContent = "⏳ 正在上传图片并发布中...";
-    }
-    if (elements.republishToPixivBtn) {
-      elements.republishToPixivBtn.disabled = true;
-    }
-
-    try {
-      const res = await fetch(`/api/submissions/${encodeURIComponent(sub.task_id)}/publish/pixiv`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          force_rebuild: false,
-          force_republish: forceRepublish,
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const detail = data.detail || {};
-        const msg = detail.message || (typeof data.detail === "string" ? data.detail : "发布到 Pixiv 失败");
-        throw new Error(msg);
-      }
-
-      if (sub.pixiv) {
-        sub.pixiv.illust_id = data.illust_id;
-        sub.pixiv.published_at = data.published_at;
-        sub.pixiv.last_publish_status = "success";
-      }
-
-      renderPixivMetadataUI();
-      showNotice(`🎉 ${data.message || "发布成功！"}`, "info");
-    } catch (err) {
-      showNotice(`发布到 Pixiv 失败: ${err.message}`, "error");
-      renderPixivMetadataUI();
-    } finally {
-      if (elements.republishToPixivBtn) {
-        elements.republishToPixivBtn.disabled = false;
-      }
-    }
-  }
 
   if (elements.publishToPixivBtn) {
     elements.publishToPixivBtn.addEventListener("click", () => handlePublishToPixiv(false));

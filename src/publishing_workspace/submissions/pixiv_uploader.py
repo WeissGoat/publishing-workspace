@@ -13,7 +13,7 @@ from ..models import utc_now_iso
 from ..packages.builder import PackageBuilder
 from ..tasks.paths import TaskPaths
 from .models import PixivMetadata
-from .pixiv_metadata import resolve_proxies
+from .pixiv_metadata import create_pixiv_session, resolve_proxies
 from .repository import SubmissionRepository
 
 logger = get_logger(__name__)
@@ -36,7 +36,7 @@ class PixivUploadResult:
 
 
 def generate_image_order(file_count: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """生成 Pixiv 上传所需的 imageOrder 字段字典并注入 payload。"""
+    """生成符合 Pixiv 顺序规范的 imageOrder 字典字段。"""
     image_order: dict[str, Any] = {}
     for index in range(file_count):
         image_order[f"imageOrder[{index}][fileKey]"] = str(index)
@@ -62,11 +62,28 @@ def build_pixiv_payload(
     file_count: int,
     *,
     fallback_title: str = "",
+    default_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """组装符合 Pixiv AJAX 接口规范的表单 payload。"""
-    title = pixiv_meta.title.strip() or fallback_title.strip() or "Untitled"
+    title = (pixiv_meta.title or "").strip() or fallback_title.strip() or "Untitled"
     caption = pixiv_meta.caption or ""
-    tags = list(pixiv_meta.tags or [])
+
+    # 标签清洗与兜底：Pixiv 限制 1~10 个标签
+    tags = [str(t).strip() for t in (pixiv_meta.tags or []) if str(t).strip()]
+    if not tags and default_tags:
+        tags = [str(t).strip() for t in default_tags if str(t).strip()]
+    if not tags:
+        tags = ["AIイラスト", "オリジナル"] if pixiv_meta.ai_type else ["イラスト", "オリジナル"]
+
+    # 确保标签去重且不超过 10 个
+    seen = set()
+    cleaned_tags = []
+    for t in tags:
+        if t.casefold() not in seen:
+            seen.add(t.casefold())
+            cleaned_tags.append(t)
+    tags = cleaned_tags[:10]
+
     is_r18 = bool(pixiv_meta.r18)
     allow_tag_edit = bool(pixiv_meta.allow_tag_edit)
     ai_type = "aiGenerated" if pixiv_meta.ai_type else "notAiGenerated"
@@ -147,10 +164,9 @@ class PixivUploadService:
         proxy: str | None = None,
         poll_timeout_seconds: int = 60,
         title_fallback: str = "",
+        default_tags: list[str] | None = None,
     ) -> str:
         """执行 Pixiv 上传与转码轮询，成功返回作品 PID (illust_id)，失败抛出异常。"""
-        import requests
-
         clean_cookie = cookie.strip()
         if not clean_cookie:
             raise ValueError("未配置 Pixiv Cookie，请在 workspace.yaml 中配置 pixiv.pixiv_cookie")
@@ -175,11 +191,13 @@ class PixivUploadService:
             headers["x-csrf-token"] = token.strip()
 
         proxies = resolve_proxies(proxy)
+        session = create_pixiv_session(proxies=proxies, max_retries=5)
 
         payload = build_pixiv_payload(
             pixiv_meta,
             len(image_paths),
             fallback_title=title_fallback,
+            default_tags=default_tags,
         )
 
         files = []
@@ -192,13 +210,12 @@ class PixivUploadService:
                 mime = "image/png" if ext == ".png" else "image/jpeg"
                 files.append(("files[]", (p.name, fh, mime)))
 
-            resp = requests.post(
+            resp = session.post(
                 PIXIV_CREATE_URL,
                 headers=headers,
                 data=payload,
                 files=files,
-                proxies=proxies,
-                timeout=30,
+                timeout=45,
             )
         finally:
             for fh in file_handles:
@@ -228,10 +245,9 @@ class PixivUploadService:
         start_time = time.time()
         while time.time() - start_time < poll_timeout_seconds:
             try:
-                poll_resp = requests.get(
+                poll_resp = session.get(
                     progress_url,
                     headers=headers,
-                    proxies=proxies,
                     timeout=15,
                 )
                 if poll_resp.status_code == 200:
@@ -338,6 +354,7 @@ class PixivUploadService:
                 token=token,
                 poll_timeout_seconds=poll_timeout_seconds,
                 title_fallback=submission.title,
+                default_tags=config.pixiv.default_tags,
             )
 
             # 回写持久化

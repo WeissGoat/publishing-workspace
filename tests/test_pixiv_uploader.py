@@ -97,8 +97,8 @@ def test_upload_service_missing_cookie(tmp_path: Path):
     assert res.error_code == "cookie_missing"
 
 
-@patch("requests.post")
-@patch("requests.get")
+@patch("requests.Session.post")
+@patch("requests.Session.get")
 def test_upload_service_success(mock_get, mock_post, tmp_path: Path, monkeypatch):
     paths, _, _ = init_workspace(tmp_path)
     task_paths = TaskPaths.from_workspace(paths, "sub-001")
@@ -147,7 +147,7 @@ def test_upload_service_success(mock_get, mock_post, tmp_path: Path, monkeypatch
     assert saved_sub.pixiv.last_publish_status == "success"
 
 
-@patch("requests.post")
+@patch("requests.Session.post")
 def test_upload_service_captcha_error(mock_post, tmp_path: Path, monkeypatch):
     paths, _, _ = init_workspace(tmp_path)
     task_paths = TaskPaths.from_workspace(paths, "sub-001")
