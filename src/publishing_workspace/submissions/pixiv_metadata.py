@@ -201,6 +201,26 @@ def suggest_tags_from_assets(
     }
 
 
+def resolve_proxies(proxy: str | None = None) -> dict[str, str] | None:
+    """解析 HTTP/HTTPS 代理配置，优先使用显式传入的代理，否则自动读取系统代理。"""
+    if proxy and str(proxy).strip() and str(proxy).strip() != "xxx:xxx":
+        p = str(proxy).strip()
+        if not (p.startswith("http://") or p.startswith("https://") or p.startswith("socks5://")):
+            p = f"http://{p}"
+        return {"http": p, "https": p}
+
+    try:
+        from urllib.request import getproxies
+        sys_p = getproxies()
+        if sys_p.get("http") or sys_p.get("https"):
+            http_val = sys_p.get("http") or sys_p.get("https")
+            https_val = sys_p.get("https") or sys_p.get("http")
+            return {"http": http_val, "https": https_val}
+    except Exception:
+        pass
+    return None
+
+
 def suggest_tags_from_pixiv_sync(
     image_path: str | Path,
     *,
@@ -236,14 +256,12 @@ def suggest_tags_from_pixiv_sync(
         ext = path.suffix.lower()
         mime = "image/png" if ext == ".png" else "image/jpeg"
 
-        proxies = None
-        if proxy and proxy.strip() and proxy.strip() != "xxx:xxx":
-            proxies = {"http": proxy.strip(), "https": proxy.strip()}
+        proxies = resolve_proxies(proxy)
 
         with open(path, "rb") as f:
             files = {"image": (path.name, f.read(), mime)}
 
-        resp = requests.post(url, files=files, headers=headers, proxies=proxies, timeout=10)
+        resp = requests.post(url, files=files, headers=headers, proxies=proxies, timeout=15)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, dict) and "body" in data and isinstance(data["body"], dict):
@@ -281,11 +299,9 @@ def fetch_pixiv_past_tags_sync(
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         }
 
-        proxies = None
-        if proxy and proxy.strip() and proxy.strip() != "xxx:xxx":
-            proxies = {"http": proxy.strip(), "https": proxy.strip()}
+        proxies = resolve_proxies(proxy)
 
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
         if resp.status_code == 200:
             m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', resp.text)
             if m:

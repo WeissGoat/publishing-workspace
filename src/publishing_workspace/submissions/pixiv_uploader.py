@@ -13,6 +13,7 @@ from ..models import utc_now_iso
 from ..packages.builder import PackageBuilder
 from ..tasks.paths import TaskPaths
 from .models import PixivMetadata
+from .pixiv_metadata import resolve_proxies
 from .repository import SubmissionRepository
 
 logger = get_logger(__name__)
@@ -107,11 +108,21 @@ def collect_publishable_images(task_paths: TaskPaths) -> list[Path]:
     if not latest_build.is_dir():
         return []
 
-    post_dir = latest_build / "post"
-    all_dir = latest_build / "all"
+    # 优先检查 latest/output/post 与 latest/output/all，向下兼容 latest/post 与 latest/all
+    candidates = [
+        latest_build / "output" / "post",
+        latest_build / "output" / "all",
+        latest_build / "post",
+        latest_build / "all",
+    ]
 
-    target_dir = post_dir if (post_dir.is_dir() and any(post_dir.iterdir())) else all_dir
-    if not target_dir.is_dir():
+    target_dir = None
+    for cand in candidates:
+        if cand.is_dir() and any(cand.iterdir()):
+            target_dir = cand
+            break
+
+    if target_dir is None:
         return []
 
     valid_exts = {".png", ".jpg", ".jpeg", ".webp"}
@@ -148,7 +159,6 @@ class PixivUploadService:
             raise ValueError("待上传图片列表为空")
 
         headers = {
-            "authority": "www.pixiv.net",
             "accept": "application/json",
             "accept-language": "ja,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6",
             "cookie": clean_cookie,
@@ -164,9 +174,7 @@ class PixivUploadService:
         if token and token.strip():
             headers["x-csrf-token"] = token.strip()
 
-        proxies = None
-        if proxy and proxy.strip() and proxy.strip() != "xxx:xxx":
-            proxies = {"http": proxy.strip(), "https": proxy.strip()}
+        proxies = resolve_proxies(proxy)
 
         payload = build_pixiv_payload(
             pixiv_meta,
@@ -219,24 +227,27 @@ class PixivUploadService:
         progress_url = f"{PIXIV_PROGRESS_URL}?convertKey={convert_key}&lang=zh"
         start_time = time.time()
         while time.time() - start_time < poll_timeout_seconds:
-            poll_resp = requests.get(
-                progress_url,
-                headers=headers,
-                proxies=proxies,
-                timeout=10,
-            )
-            if poll_resp.status_code == 200:
-                poll_data = poll_resp.json()
-                poll_body = poll_data.get("body", {})
-                status = poll_body.get("status")
-                if status == "COMPLETE":
-                    illust_id = poll_body.get("illustId")
-                    if not illust_id:
-                        raise RuntimeError("转码完成但未获取到 illustId")
-                    logger.info("Pixiv 投稿成功发布！illustId=%s", illust_id)
-                    return str(illust_id)
-                elif status == "FAILED":
-                    raise RuntimeError(f"Pixiv 服务端转码失败：{poll_body}")
+            try:
+                poll_resp = requests.get(
+                    progress_url,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=15,
+                )
+                if poll_resp.status_code == 200:
+                    poll_data = poll_resp.json()
+                    poll_body = poll_data.get("body", {})
+                    status = poll_body.get("status")
+                    if status == "COMPLETE":
+                        illust_id = poll_body.get("illustId")
+                        if not illust_id:
+                            raise RuntimeError("转码完成但未获取到 illustId")
+                        logger.info("Pixiv 投稿成功发布！illustId=%s", illust_id)
+                        return str(illust_id)
+                    elif status == "FAILED":
+                        raise RuntimeError(f"Pixiv 服务端转码失败：{poll_body}")
+            except requests.exceptions.RequestException as e:
+                logger.warning("轮询 Pixiv 转码进度遇到暂时性重试：%s", e)
             time.sleep(1)
 
         raise TimeoutError(f"Pixiv 转码轮询超时 ({poll_timeout_seconds}s)")
