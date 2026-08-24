@@ -142,6 +142,7 @@ class PixivAutoConfig(BaseModel):
     )
     r18: bool = True
     allow_tag_edit: bool = True
+    original: bool = False
     pixiv_cookie: str = ""
     pixiv_token: str = ""
 

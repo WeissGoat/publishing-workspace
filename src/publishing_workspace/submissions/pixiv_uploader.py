@@ -100,7 +100,7 @@ def build_pixiv_payload(
         "attributes[yuri]": "false",
         "caption": caption,
         "captionTranslations[en]": "",
-        "original": "true",
+        "original": "false",
         "ratings[antisocial]": "false",
         "ratings[drug]": "false",
         "ratings[religion]": "false",
