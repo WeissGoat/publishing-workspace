@@ -88,6 +88,8 @@ def build_pixiv_payload(
     allow_tag_edit = bool(pixiv_meta.allow_tag_edit)
     ai_type = "aiGenerated" if pixiv_meta.ai_type else "notAiGenerated"
 
+    suggested_tags = [str(t).strip() for t in (pixiv_meta.suggested_tags or []) if str(t).strip()]
+
     payload: dict[str, Any] = {
         "aiType": ai_type,
         "allowComment": "true",
@@ -106,7 +108,7 @@ def build_pixiv_payload(
         "ratings[violent]": "false",
         "responseAutoAccept": "false",
         "restrict": "public",
-        "suggestedTags[]": ["女の子"],
+        "suggestedTags[]": suggested_tags,
         "tags[]": tags,
         "title": title,
         "titleTranslations[en]": "",
