@@ -301,6 +301,11 @@ def register_library_routes(app: FastAPI) -> None:
         paths, config = load_workspace(app.state.publishing_root)
         catalog_repo = CatalogRepository(paths.catalog)
         assets_map = catalog_repo.assets_by_ids(payload.asset_ids, import_id=payload.import_id)
+        if len(assets_map) < len(payload.asset_ids):
+            fallback_map = catalog_repo.assets_by_ids(payload.asset_ids)
+            fallback_map.update(assets_map)
+            assets_map = fallback_map
+
         assets = list(assets_map.values())
 
         title = generate_title(assets)
@@ -320,6 +325,8 @@ def register_library_routes(app: FastAPI) -> None:
         paths, config = load_workspace(app.state.publishing_root)
         catalog_repo = CatalogRepository(paths.catalog)
         assets_map = catalog_repo.assets_by_ids([payload.asset_id], import_id=payload.import_id)
+        if not assets_map or payload.asset_id not in assets_map:
+            assets_map = catalog_repo.assets_by_ids([payload.asset_id])
         if not assets_map or payload.asset_id not in assets_map:
             raise HTTPException(status_code=404, detail="素材不存在")
 

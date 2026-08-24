@@ -2993,7 +2993,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             asset_id: targetId,
-            import_id: state.filters.import_id || null,
+            import_id: sub.source_import_id || null,
           }),
         });
         if (res.ok) {
