@@ -161,6 +161,7 @@
 
     submissionTaskBadge: document.getElementById("submission-task-badge"),
     submissionRevBadge: document.getElementById("submission-rev-badge"),
+    submissionPixivBadge: document.getElementById("submission-pixiv-badge"),
     tabAll: document.getElementById("tab-all"),
     tabPost: document.getElementById("tab-post"),
     tabCover: document.getElementById("tab-cover"),
@@ -1201,7 +1202,9 @@
           const opt = document.createElement("option");
           opt.value = sub.task_id;
           const postCount = sub.counts && typeof sub.counts.post === "number" ? ` (${sub.counts.post}图)` : "";
-          opt.textContent = `${sub.title || sub.task_id}${postCount}`;
+          const pixivPrefix = sub.pixiv?.illust_id ? "✓ " : "";
+          const pixivSuffix = sub.pixiv?.illust_id ? ` [PID:${sub.pixiv.illust_id}]` : "";
+          opt.textContent = `${pixivPrefix}${sub.title || sub.task_id}${postCount}${pixivSuffix}`;
           elements.historySubmissionSelect.appendChild(opt);
         }
       }
@@ -1235,6 +1238,10 @@
           suggested_tags: Array.isArray(data.pixiv.suggested_tags) ? [...data.pixiv.suggested_tags] : [],
           r18: data.pixiv.r18 !== false,
           allow_tag_edit: data.pixiv.allow_tag_edit !== false,
+          illust_id: data.pixiv.illust_id || null,
+          published_at: data.pixiv.published_at || null,
+          last_publish_status: data.pixiv.last_publish_status || null,
+          last_publish_error: data.pixiv.last_publish_error || null,
         } : {
           title: data.title || "",
           caption: "",
@@ -1242,6 +1249,10 @@
           suggested_tags: [],
           r18: true,
           allow_tag_edit: true,
+          illust_id: null,
+          published_at: null,
+          last_publish_status: null,
+          last_publish_error: null,
         },
         scheduled_at: data.scheduled_at || null,
         currentSetTab: "all",
@@ -1284,6 +1295,10 @@
         suggested_tags: [],
         r18: true,
         allow_tag_edit: true,
+        illust_id: null,
+        published_at: null,
+        last_publish_status: null,
+        last_publish_error: null,
       },
       scheduled_at: null,
       currentSetTab: "all",
@@ -1435,6 +1450,16 @@
 
     // 渲染 Pixiv 发布状态与按钮
     const sub = state.currentSubmission;
+    if (elements.submissionPixivBadge) {
+      if (pix.illust_id) {
+        elements.submissionPixivBadge.classList.remove("hidden");
+        elements.submissionPixivBadge.className = "meta-badge meta-badge-pixiv published";
+        elements.submissionPixivBadge.innerHTML = `<a href="https://www.pixiv.net/artworks/${encodeURIComponent(pix.illust_id)}" target="_blank">✓ Pixiv: PID ${escapeHtml(pix.illust_id)} ↗</a>`;
+      } else {
+        elements.submissionPixivBadge.classList.add("hidden");
+      }
+    }
+
     if (elements.pixivPublishStatusBox && elements.publishToPixivBtn) {
       if (pix.illust_id) {
         elements.pixivPublishStatusBox.classList.remove("hidden");
@@ -1663,6 +1688,10 @@
         suggested_tags: sub.pixiv?.suggested_tags || state.tagSuggestions.pixiv || [],
         r18: elements.pixivR18 ? elements.pixivR18.checked : (sub.pixiv?.r18 !== false),
         allow_tag_edit: elements.pixivAllowTagEdit ? elements.pixivAllowTagEdit.checked : (sub.pixiv?.allow_tag_edit !== false),
+        illust_id: sub.pixiv?.illust_id || null,
+        published_at: sub.pixiv?.published_at || null,
+        last_publish_status: sub.pixiv?.last_publish_status || null,
+        last_publish_error: sub.pixiv?.last_publish_error || null,
       },
       revision: sub.task_id ? sub.revision : null,
       scheduled_at: scheduledAt,
@@ -1719,6 +1748,10 @@
           suggested_tags: Array.isArray(savedData.pixiv.suggested_tags) ? [...savedData.pixiv.suggested_tags] : [],
           r18: savedData.pixiv.r18 !== false,
           allow_tag_edit: savedData.pixiv.allow_tag_edit !== false,
+          illust_id: savedData.pixiv.illust_id || null,
+          published_at: savedData.pixiv.published_at || null,
+          last_publish_status: savedData.pixiv.last_publish_status || null,
+          last_publish_error: savedData.pixiv.last_publish_error || null,
         } : payload.pixiv,
         scheduled_at: savedData.scheduled_at || null,
         currentSetTab: sub.currentSetTab,

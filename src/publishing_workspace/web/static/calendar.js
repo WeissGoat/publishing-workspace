@@ -49,6 +49,7 @@
     detailTitle: document.getElementById("detail-task-title"),
     detailTaskId: document.getElementById("detail-task-id"),
     detailExportStatus: document.getElementById("detail-export-status"),
+    detailPixivStatus: document.getElementById("detail-pixiv-status"),
     detailOpenLibraryBtn: document.getElementById("detail-open-library-btn"),
     detailDeleteSubmissionBtn: document.getElementById("detail-delete-submission-btn"),
     detailCountAll: document.getElementById("detail-count-all"),
@@ -286,11 +287,15 @@
     let badgeText = isTask ? "task" : "散图";
     let badgeClass = isInline ? "entry-badge legacy" : "entry-badge";
     let countText = "";
+    let pixivBadge = "";
 
     if (isTask) {
       const sub = state.submissions.find((s) => s.task_id === entry.content.task_id);
       if (sub && sub.counts) {
         countText = `${sub.counts.all || sub.counts.post || 0}图`;
+      }
+      if (sub && sub.pixiv && sub.pixiv.illust_id) {
+        pixivBadge = `<span class="entry-badge pixiv-published" title="已发布到 Pixiv (PID: ${sub.pixiv.illust_id})">✓ PID ${sub.pixiv.illust_id}</span>`;
       }
     } else if (isInline && entry.content.sets) {
       const allLen = (entry.content.sets.all || entry.content.sets.post || []).length;
@@ -310,6 +315,7 @@
           <span class="entry-card-time">${timeStr}</span>
           <span class="${badgeClass}">${badgeText}</span>
           ${countText ? `<span class="entry-count-tag">${countText}</span>` : ""}
+          ${pixivBadge}
         </div>
       </div>
     `;
@@ -507,6 +513,15 @@
     elements.detailCountAll.textContent = String(sets.all?.length || 0);
     elements.detailCountPost.textContent = String(sets.post?.length || 0);
     elements.detailCountCover.textContent = String(sets.cover?.length || 0);
+
+    if (elements.detailPixivStatus) {
+      if (detail.pixiv && detail.pixiv.illust_id) {
+        elements.detailPixivStatus.classList.remove("hidden");
+        elements.detailPixivStatus.innerHTML = `<a href="https://www.pixiv.net/artworks/${encodeURIComponent(detail.pixiv.illust_id)}" target="_blank">✓ Pixiv: PID ${escapeHtml(detail.pixiv.illust_id)} ↗</a>`;
+      } else {
+        elements.detailPixivStatus.classList.add("hidden");
+      }
+    }
 
     // 渲染选集图片缩略图
     renderDetailThumbsGrid();
