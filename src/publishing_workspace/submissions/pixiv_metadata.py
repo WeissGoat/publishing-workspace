@@ -221,52 +221,89 @@ def resolve_proxies(proxy: str | None = None) -> dict[str, str] | None:
     return None
 
 
+def prepare_image_for_suggest(image_path: Path) -> tuple[str, bytes, str]:
+    """生成用于 Pixiv 识别的小尺寸预览图字节（<=1024px, JPEG），极大缩短上传时间与代理超时几率。"""
+    try:
+        import io
+        from PIL import Image
+
+        with Image.open(image_path) as im:
+            im.thumbnail((1024, 1024))
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, format="JPEG", quality=85)
+            return "preview.jpg", buf.getvalue(), "image/jpeg"
+    except Exception:
+        ext = image_path.suffix.lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg"
+        with open(image_path, "rb") as f:
+            return image_path.name, f.read(), mime
+
+
+def create_pixiv_session(proxies: dict[str, str] | None = None, max_retries: int = 5) -> Any:
+    """创建配置了智能重试与代理的 Pixiv 请求 Session。"""
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util import Retry
+
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=max_retries,
+        connect=max_retries,
+        read=max_retries,
+        backoff_factor=0.5,
+        status_forcelist=[500, 502, 503, 504],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=5, pool_maxsize=5)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    if proxies:
+        session.proxies.update(proxies)
+    return session
+
+
 def suggest_tags_from_pixiv_sync(
     image_path: str | Path,
     *,
     cookie: str = "",
     token: str = "",
     proxy: str | None = None,
+    timeout: int = 30,
 ) -> list[str]:
-    """通过 Pixiv 官方 suggest_tags_by_image API 推荐标签。"""
+    """通过 Pixiv 官方 suggest_tags_by_image API 推荐标签（带自动重试与图像压缩）。"""
     path = Path(image_path)
     if not path.is_file():
         logger.warning("Pixiv suggest_tags: 文件不存在：%s", image_path)
         return []
 
+    url = "https://www.pixiv.net/rpc/suggest_tags_by_image.php"
+    headers = {
+        "accept": "application/json",
+        "accept-language": "ja,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6",
+        "dnt": "1",
+        "origin": "https://www.pixiv.net",
+        "referer": "https://www.pixiv.net/illustration/create",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "sentry-trace": f"{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-0",
+    }
+    if cookie:
+        headers["cookie"] = cookie
+    if token:
+        headers["x-csrf-token"] = token
+
+    proxies = resolve_proxies(proxy)
+    filename, file_bytes, mime = prepare_image_for_suggest(path)
+    session = create_pixiv_session(proxies, max_retries=5)
+
     try:
-        import requests
-
-        url = "https://www.pixiv.net/rpc/suggest_tags_by_image.php"
-        headers = {
-            "authority": "www.pixiv.net",
-            "accept": "application/json",
-            "accept-language": "ja,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6",
-            "dnt": "1",
-            "origin": "https://www.pixiv.net",
-            "referer": "https://www.pixiv.net/illustration/create",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "sentry-trace": f"{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-0",
-        }
-        if cookie:
-            headers["cookie"] = cookie
-        if token:
-            headers["x-csrf-token"] = token
-
-        ext = path.suffix.lower()
-        mime = "image/png" if ext == ".png" else "image/jpeg"
-
-        proxies = resolve_proxies(proxy)
-
-        with open(path, "rb") as f:
-            files = {"image": (path.name, f.read(), mime)}
-
-        resp = requests.post(url, files=files, headers=headers, proxies=proxies, timeout=15)
+        files = {"image": (filename, file_bytes, mime)}
+        resp = session.post(url, files=files, headers=headers, timeout=timeout)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, dict) and "body" in data and isinstance(data["body"], dict):
                 tags = data["body"].get("tags", [])
                 if isinstance(tags, list):
+                    logger.info("Pixiv suggest_tags 识别成功，获取到 %d 个推荐标签: %s", len(tags), tags)
                     return [str(t).strip() for t in tags if str(t).strip()]
         logger.warning("Pixiv suggest_tags 响应异常：%s %s", resp.status_code, resp.text[:200])
         return []
@@ -279,35 +316,36 @@ def fetch_pixiv_past_tags_sync(
     cookie: str,
     *,
     proxy: str | None = None,
+    timeout: int = 30,
 ) -> list[str]:
     """从 Pixiv 投稿页面 SSR 数据包中获取用户账号的历史常用标签。"""
+    import json
+
     clean_cookie = str(cookie or "").strip()
     if not clean_cookie:
         logger.warning("Pixiv fetch_past_tags: 未提供 cookie")
         return []
 
+    url = "https://www.pixiv.net/illustration/create"
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "accept-language": "ja,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6",
+        "cookie": clean_cookie,
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    }
+
+    proxies = resolve_proxies(proxy)
+    session = create_pixiv_session(proxies, max_retries=5)
+
     try:
-        import json
-        import requests
-
-        url = "https://www.pixiv.net/illustration/create"
-        headers = {
-            "authority": "www.pixiv.net",
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "accept-language": "ja,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6",
-            "cookie": clean_cookie,
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        }
-
-        proxies = resolve_proxies(proxy)
-
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
+        resp = session.get(url, headers=headers, timeout=timeout)
         if resp.status_code == 200:
             m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', resp.text)
             if m:
                 data = json.loads(m.group(1))
                 past_tags = data.get("props", {}).get("pageProps", {}).get("pastTags", [])
                 if isinstance(past_tags, list):
+                    logger.info("Pixiv fetch_past_tags 抓取成功，获取到 %d 个常用标签", len(past_tags))
                     return [str(t).strip() for t in past_tags if str(t).strip()]
         logger.warning("Pixiv fetch_past_tags 响应异常：%s %s", resp.status_code, resp.text[:200])
         return []
