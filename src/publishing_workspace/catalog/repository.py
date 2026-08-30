@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from collections.abc import Collection, Iterator
 from contextlib import contextmanager
@@ -41,6 +42,16 @@ class CatalogIngestResult(BaseModel):
     outcome: Literal["reused_path", "reused_content", "parsed_new"]
 
 
+_INITIALIZED_CATALOGS: set[str] = set()
+_GLOBAL_ASSET_PATH_CACHE: dict[str, str] = {}
+
+
+def clear_catalog_init_cache() -> None:
+    """清理 Catalog 初始化与路径内存缓存，用于单元测试重置。"""
+    _INITIALIZED_CATALOGS.clear()
+    _GLOBAL_ASSET_PATH_CACHE.clear()
+
+
 class CatalogRepository:
     def __init__(self, path: str | Path, *, backups_dir: str | Path | None = None):
         self.path = Path(path)
@@ -52,8 +63,10 @@ class CatalogRepository:
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA temp_store = MEMORY")
         connection.execute("PRAGMA cache_size = -131072")
@@ -68,6 +81,10 @@ class CatalogRepository:
             connection.close()
 
     def initialize(self) -> None:
+        resolved_key = str(self.path.resolve()).casefold()
+        if resolved_key in _INITIALIZED_CATALOGS and self.path.exists():
+            return
+
         version = self._read_version()
         if version is None:
             with self.connection() as connection:
@@ -76,20 +93,26 @@ class CatalogRepository:
                     "INSERT INTO schema_meta(schema_id, version) VALUES (?, ?)",
                     (SCHEMA_ID, SCHEMA_VERSION),
                 )
+            _INITIALIZED_CATALOGS.add(resolved_key)
             return
         if version == 1:
             backup = migrate_catalog_v1_to_v2(self.path, self.backups_dir)
             logger.warning("Publishing Catalog 已从 v1 升级到 v2，备份：%s", backup)
+            _INITIALIZED_CATALOGS.add(resolved_key)
             return
         if version != SCHEMA_VERSION:
             raise RuntimeError(f"不支持的 Publishing Catalog schema version：{version}")
+
         with self.connection() as connection:
-            connection.executescript(SCHEMA_SQL)
+            self._ensure_imports_tags_column(connection)
+
+        _INITIALIZED_CATALOGS.add(resolved_key)
 
     def _read_version(self) -> int | None:
         if not self.path.exists():
             return None
-        with sqlite3.connect(self.path) as connection:
+        with sqlite3.connect(self.path, timeout=30.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 30000")
             columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(schema_meta)").fetchall()
             }
@@ -435,7 +458,7 @@ class CatalogRepository:
                 rows = connection.execute(
                     "SELECT ii.asset_id, ii.resolved_path, ii.source_order, ii.display_name "
                     "FROM import_items ii JOIN imports i ON i.import_id=ii.import_id "
-                    "WHERE ii.asset_id IS NOT NULL ORDER BY i.rowid, ii.source_order"
+                    "WHERE ii.asset_id IS NOT NULL ORDER BY i.rowid DESC, ii.source_order ASC"
                 ).fetchall()
             unique_rows: dict[str, sqlite3.Row] = {}
             for row in rows:
@@ -443,20 +466,51 @@ class CatalogRepository:
             if not unique_rows:
                 return []
 
-            asset_ids = list(unique_rows)
-            assets = self._rows_by_asset_id(connection, "assets", asset_ids)
-            paths = self._group_rows_by_asset_id(
-                connection,
-                "asset_paths",
-                asset_ids,
-                order_by="asset_id, available DESC, rowid",
-            )
-            nodes = self._group_rows_by_asset_id(
-                connection,
-                "asset_nodes",
-                asset_ids,
-                order_by="asset_id, role, node_index, rowid",
-            )
+            if import_id:
+                asset_rows = connection.execute(
+                    "SELECT a.* FROM assets a "
+                    "JOIN import_items ii ON ii.asset_id=a.asset_id "
+                    "WHERE ii.import_id=?",
+                    (import_id,),
+                ).fetchall()
+                assets = {row["asset_id"]: row for row in asset_rows}
+
+                path_rows = connection.execute(
+                    "SELECT ap.* FROM asset_paths ap "
+                    "JOIN import_items ii ON ii.asset_id=ap.asset_id "
+                    "WHERE ii.import_id=? "
+                    "ORDER BY ap.asset_id, ap.available DESC, ap.rowid",
+                    (import_id,),
+                ).fetchall()
+                paths: dict[str, list[sqlite3.Row]] = {}
+                for r in path_rows:
+                    paths.setdefault(r["asset_id"], []).append(r)
+
+                node_rows = connection.execute(
+                    "SELECT an.* FROM asset_nodes an "
+                    "JOIN import_items ii ON ii.asset_id=an.asset_id "
+                    "WHERE ii.import_id=? "
+                    "ORDER BY an.asset_id, an.role, an.node_index, an.rowid",
+                    (import_id,),
+                ).fetchall()
+                nodes: dict[str, list[sqlite3.Row]] = {}
+                for r in node_rows:
+                    nodes.setdefault(r["asset_id"], []).append(r)
+            else:
+                asset_rows = connection.execute("SELECT * FROM assets").fetchall()
+                assets = {row["asset_id"]: row for row in asset_rows}
+                path_rows = connection.execute(
+                    "SELECT rowid, * FROM asset_paths ORDER BY asset_id, available DESC, rowid"
+                ).fetchall()
+                paths: dict[str, list[sqlite3.Row]] = {}
+                for r in path_rows:
+                    paths.setdefault(r["asset_id"], []).append(r)
+                node_rows = connection.execute(
+                    "SELECT rowid, * FROM asset_nodes ORDER BY asset_id, role, node_index, rowid"
+                ).fetchall()
+                nodes: dict[str, list[sqlite3.Row]] = {}
+                for r in node_rows:
+                    nodes.setdefault(r["asset_id"], []).append(r)
 
             records: list[AssetRecord] = []
             for asset_id, source_row in unique_rows.items():
@@ -506,7 +560,54 @@ class CatalogRepository:
                         warnings=list(node_info.warnings),
                     )
                 )
+            for r in records:
+                if r.path:
+                    _GLOBAL_ASSET_PATH_CACHE[r.asset_id] = str(r.path)
             return records
+
+    def snapshots_for_asset(self, asset_id: str) -> list[dict[str, Any]]:
+        """查询指定素材出现过的所有快照（按快照导入时间降序、快照内序号升序排列）。"""
+        if not asset_id:
+            return []
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT "
+                "  i.import_id, i.source_type, i.source_ref, i.mode, i.status AS import_status, "
+                "  i.total_items, i.tags_json, i.created_at AS import_created_at, "
+                "  ii.source_order, ii.source_path, ii.resolved_path, ii.display_name, "
+                "  ii.decision, ii.status AS item_status "
+                "FROM import_items ii "
+                "JOIN imports i ON i.import_id = ii.import_id "
+                "WHERE ii.asset_id = ? "
+                "ORDER BY i.created_at DESC, ii.source_order ASC",
+                (asset_id,),
+            ).fetchall()
+
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            ref = r["source_ref"] or ""
+            name = Path(ref).name if ref else r["import_id"]
+            tags = []
+            try:
+                tags = json.loads(r["tags_json"] or "[]")
+            except Exception:
+                pass
+            results.append({
+                "import_id": r["import_id"],
+                "name": name,
+                "source_type": r["source_type"],
+                "source_ref": r["source_ref"],
+                "source_order": r["source_order"],
+                "total_items": r["total_items"],
+                "tags": tags,
+                "display_name": r["display_name"],
+                "source_path": r["source_path"],
+                "resolved_path": r["resolved_path"],
+                "decision": r["decision"],
+                "status": r["item_status"],
+                "created_at": r["import_created_at"],
+            })
+        return results
 
     def assets_by_ids(
         self,
@@ -560,6 +661,9 @@ class CatalogRepository:
                         }
                     )
                 result[asset_id] = record
+            for aid, r in result.items():
+                if r.path:
+                    _GLOBAL_ASSET_PATH_CACHE[aid] = str(r.path)
             return result
 
     def _rows_by_asset_id(
@@ -607,11 +711,78 @@ class CatalogRepository:
         ).fetchone()
         return row["import_id"] if row else None
 
+    def _ensure_imports_tags_column(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(imports)").fetchall()
+        }
+        if "tags_json" not in columns:
+            connection.execute("ALTER TABLE imports ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
+
+    def list_imports_summary(self, *, deduplicate_sources: bool = True) -> list[dict[str, Any]]:
+        """返回已导入快照详情列表（按创建时间倒序排），默认按同源图集归并，供前端与 API 交互选择使用。"""
+        with self.connection() as connection:
+            self._ensure_imports_tags_column(connection)
+            rows = connection.execute(
+                "SELECT import_id, source_type, source_ref, total_items, tags_json, created_at, status "
+                "FROM imports ORDER BY rowid DESC"
+            ).fetchall()
+
+        if not deduplicate_sources:
+            raw_result: list[dict[str, Any]] = []
+            for row in rows:
+                tags = _parse_tags_json(row["tags_json"] if "tags_json" in row.keys() else None)
+                raw_result.append(
+                    {
+                        "import_id": str(row["import_id"]),
+                        "source_type": str(row["source_type"]),
+                        "source_ref": str(row["source_ref"]),
+                        "total_items": int(row["total_items"] or 0),
+                        "tags": tags,
+                        "created_at": str(row["created_at"] or ""),
+                        "status": str(row["status"] or ""),
+                        "import_count": 1,
+                    }
+                )
+            return raw_result
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            ref = str(row["source_ref"] or "")
+            key = os.path.normpath(ref).casefold()
+            tags = _parse_tags_json(row["tags_json"] if "tags_json" in row.keys() else None)
+            total = int(row["total_items"] or 0)
+            status = str(row["status"] or "")
+
+            if key not in grouped:
+                grouped[key] = {
+                    "import_id": str(row["import_id"]),
+                    "source_type": str(row["source_type"]),
+                    "source_ref": ref,
+                    "total_items": total,
+                    "tags": list(dict.fromkeys(tags)),
+                    "created_at": str(row["created_at"] or ""),
+                    "status": status,
+                    "import_count": 1,
+                }
+            else:
+                grouped[key]["import_count"] += 1
+                for t in tags:
+                    if t not in grouped[key]["tags"]:
+                        grouped[key]["tags"].append(t)
+                # 若最新一条记录为 0 张且失败，而历史某次成功有张数，则优先继承有张数的有效代表
+                if grouped[key]["total_items"] == 0 and total > 0:
+                    grouped[key]["total_items"] = total
+                    grouped[key]["import_id"] = str(row["import_id"])
+                    grouped[key]["status"] = status
+
+        return list(grouped.values())
+
     def import_sources(self) -> list[tuple[str, str]]:
         """返回已导入来源，用于生成稳定的用户可读导出目录名。"""
         with self.connection() as connection:
             rows = connection.execute(
-                "SELECT import_id, source_ref FROM imports ORDER BY rowid"
+                "SELECT import_id, source_ref FROM imports ORDER BY rowid DESC"
             ).fetchall()
         return [(str(row["import_id"]), str(row["source_ref"])) for row in rows]
 
@@ -619,35 +790,59 @@ class CatalogRepository:
         self,
         role: str,
         import_id: str | None = None,
+        import_ids: Collection[str] | None = None,
     ) -> list[tuple[str, str | None]]:
         """直接从节点索引读取候选，供交互式节点选择使用。"""
         normalized_role = str(role).strip()
         if not normalized_role:
             raise ValueError("节点 role 不能为空")
+
+        clean_ids: list[str] = []
+        if import_ids:
+            clean_ids = [str(x).strip() for x in import_ids if str(x).strip() and str(x).strip() != "__all__"]
+        elif import_id and import_id.strip() and import_id.strip() != "__all__":
+            clean_ids = [import_id.strip()]
+
         with self.connection() as connection:
-            if import_id:
+            if clean_ids:
+                placeholders = ",".join("?" for _ in clean_ids)
                 rows = connection.execute(
                     "SELECT DISTINCT n.node_id, n.ref "
                     "FROM asset_nodes n "
                     "JOIN import_items ii ON ii.asset_id=n.asset_id "
-                    "WHERE ii.import_id=? AND ii.asset_id IS NOT NULL AND n.role=? "
+                    f"WHERE ii.import_id IN ({placeholders}) AND ii.asset_id IS NOT NULL AND n.role=? "
                     "ORDER BY LOWER(n.node_id), n.node_id, n.ref",
-                    (import_id, normalized_role),
+                    [*clean_ids, normalized_role],
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    "SELECT DISTINCT n.node_id, n.ref "
-                    "FROM asset_nodes n "
-                    "JOIN import_items ii ON ii.asset_id=n.asset_id "
-                    "JOIN imports i ON i.import_id=ii.import_id "
-                    "WHERE ii.asset_id IS NOT NULL AND n.role=? "
-                    "ORDER BY LOWER(n.node_id), n.node_id, n.ref",
+                    "SELECT DISTINCT node_id, ref "
+                    "FROM asset_nodes "
+                    "WHERE role=? "
+                    "ORDER BY LOWER(node_id), node_id, ref",
                     (normalized_role,),
                 ).fetchall()
         return [
             (str(row["node_id"] or ""), str(row["ref"]) if row["ref"] else None)
             for row in rows
         ]
+
+    def get_asset_path(self, asset_id: str) -> str | None:
+        """快速获取资产文件绝对路径，优先命中内存缓存，极速响应预览流。"""
+        cached = _GLOBAL_ASSET_PATH_CACHE.get(asset_id)
+        if cached is not None:
+            return cached
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT path FROM asset_paths WHERE asset_id=? ORDER BY available DESC, rowid LIMIT 1",
+                (asset_id,),
+            ).fetchone()
+            if row and row["path"]:
+                path_str = str(row["path"])
+                if Path(path_str).is_file():
+                    _GLOBAL_ASSET_PATH_CACHE[asset_id] = path_str
+                    return path_str
+        return None
 
     def set_asset_marks(
         self,
@@ -723,6 +918,34 @@ class CatalogRepository:
                 m = str(row["mark"])
                 result.setdefault(aid, []).append(m)
         return result
+
+    def set_asset_tags(
+        self,
+        asset_ids: list[str],
+        tags: list[str],
+        note: str = "Import tag",
+    ) -> int:
+        """为一组资产批量打上导入/筛选标签（以 'tag:<tag_name>' 存储）。"""
+        clean_tags = [str(t).strip() for t in tags if str(t).strip()]
+        if not clean_tags:
+            return 0
+        count = 0
+        for tag in clean_tags:
+            count += self.set_asset_marks(asset_ids, mark=f"tag:{tag}", note=note)
+        return count
+
+    def get_all_tags(self) -> list[dict[str, Any]]:
+        """获取当前工作区中所有已打上的标签及其关联的资产数量。"""
+        with self.connection() as connection:
+            self.initialize()
+            rows = connection.execute(
+                "SELECT mark, COUNT(DISTINCT asset_id) as count FROM asset_marks "
+                "WHERE mark LIKE 'tag:%' GROUP BY mark ORDER BY count DESC, mark ASC"
+            ).fetchall()
+        return [
+            {"name": str(row["mark"])[4:], "count": int(row["count"])}
+            for row in rows
+        ]
 
     def _asset_from_db(
         self,
@@ -851,6 +1074,18 @@ _path_key = normalize_path_key
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _parse_tags_json(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(t).strip() for t in parsed if str(t).strip()]
+    except Exception:
+        pass
+    return []
 
 
 def _snapshot_item(item: ImportedItem, *, status: str, asset_id: str | None) -> dict[str, Any]:

@@ -257,6 +257,9 @@ _REF_INDEX_LOOKUP_CACHE: dict[tuple[str | None, str, str | None], ActionResoluti
 _MANIFEST_PATH_CACHE: dict[str, Path | None] = {}
 
 
+_GLOBAL_ASSET_ACTION_CACHE: dict[tuple[str, str | None, str], ActionResolution] = {}
+
+
 class ActionNodeValueResolver:
     """为分类投影提供稳定 action 和最新 action_group 值。"""
 
@@ -286,7 +289,12 @@ class ActionNodeValueResolver:
         return list(resolution.action_values if role == "action" else resolution.group_values)
 
     def _resolve_asset(self, asset: AssetRecord) -> ActionResolution:
-        cached = self._asset_cache.get(asset.asset_id)
+        global_key = (
+            asset.asset_id,
+            str(self.design_root) if self.design_root else None,
+            self.action_root_name,
+        )
+        cached = _GLOBAL_ASSET_ACTION_CACHE.get(global_key)
         if cached is not None:
             return cached
 
@@ -300,7 +308,7 @@ class ActionNodeValueResolver:
                 "unresolved" if raw_actions else "missing",
                 (),
             )
-            self._asset_cache[asset.asset_id] = result
+            _GLOBAL_ASSET_ACTION_CACHE[global_key] = result
             return result
 
         action_values: list[str] = []
@@ -333,14 +341,14 @@ class ActionNodeValueResolver:
             status, 
             tuple(_ordered_unique(warnings)),
         )
-        self._asset_cache[asset.asset_id] = result
+        _GLOBAL_ASSET_ACTION_CACHE[global_key] = result
         for warning in result.warnings:
             if warning not in self._warning_keys:
                 self._warning_keys.add(warning)
                 self._warnings.append(warning)
                 if warning not in _GLOBAL_WARNED_KEYS:
                     _GLOBAL_WARNED_KEYS.add(warning)
-                    logger.warning("Publishing action resolution: %s", warning)
+                    logger.debug("Publishing action resolution: %s", warning)
         return result
 
     def _index_for(self, ref: str | None) -> ActionResolutionIndex | None:
