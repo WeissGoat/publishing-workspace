@@ -4906,13 +4906,19 @@
       }
 
       // 3. 同步迁移投稿集合列表 state.currentSubmission.sets (all, post, cover)
+      let submissionContainsAsset = false;
       const sets = state.currentSubmission.sets || {};
       ["all", "post", "cover"].forEach((tab) => {
         if (Array.isArray(sets[tab])) {
-          sets[tab] = sets[tab].map((id) => (id === oldAssetId ? newAssetId : id));
+          if (sets[tab].includes(oldAssetId)) {
+            submissionContainsAsset = true;
+            sets[tab] = sets[tab].map((id) => (id === oldAssetId ? newAssetId : id));
+          }
         }
       });
-      renderSetItems();
+      if (submissionContainsAsset) {
+        renderSetItems();
+      }
 
       // 4. 同步迁移数据集列表 state.datasetAssets
       if (Array.isArray(state.datasetAssets)) {
@@ -4941,15 +4947,16 @@
         state.cardElements.set(newAssetId, oldCard);
       }
 
-      // 7. 若当前存在已加载的投稿任务，自动同步持久化更新该任务
-      if (state.currentSubmission.task_id) {
+      // 7. 若当前已加载的投稿任务包含该素材，自动同步持久化更新该任务
+      if (state.currentSubmission.task_id && submissionContainsAsset) {
         try {
-          await saveSubmission("🎉 局部重绘图片已覆盖原图，当前投稿任务与集合已自动同步保存！");
+          await executeSaveSubmission("🎉 局部重绘图片已覆盖原图，当前投稿任务与集合已自动同步保存！");
         } catch (subErr) {
-          logger?.warning?.("自动同步保存投稿任务失败:", subErr);
+          console.warn("自动同步保存投稿任务失败:", subErr);
+          showNotice("🎉 局部重绘图片已覆盖原图，但同步保存投稿任务遇到提示：" + (subErr.message || subErr), "warning");
         }
       } else {
-        showNotice("🎉 局部重绘图片已成功覆盖原图，投稿集合与详情已全部同步更新！", "success");
+        showNotice("🎉 局部重绘图片已成功覆盖原图！", "success");
       }
 
       // 8. 切回查看详情模式并重新渲染
