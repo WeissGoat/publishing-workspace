@@ -56,24 +56,52 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
             try:
                 t0 = time.perf_counter()
                 logger.info("Web 正在后台预热素材检索索引与节点缓存...")
-                await asyncio.to_thread(AssetSearchService().preload, publishing_root)
+                catalog = getattr(app.state, "catalog", None)
+                await asyncio.to_thread(
+                    AssetSearchService().preload, publishing_root, catalog=catalog
+                )
                 logger.info("Web 检索索引后台预热完成 (耗时: %.2fs)", time.perf_counter() - t0)
             except Exception as exc:
                 logger.warning("Web 检索索引后台预热跳过：%s", exc)
 
+        async def _schedule_daemon():
+            from ..plans.executor import SubmissionExecutor
+
+            executor = SubmissionExecutor()
+            # 启动时先等待 3 秒完成基础初始化，然后开始周期性到期与延迟补偿扫描
+            await asyncio.sleep(3)
+            while True:
+                try:
+                    await asyncio.to_thread(executor.run_due, publishing_root)
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logger.error("定时投稿后台调度轮询异常：%s", exc)
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    break
+
         warmup_task = asyncio.create_task(_warmup())
+        schedule_task = asyncio.create_task(_schedule_daemon())
         try:
             yield
         finally:
             if not warmup_task.done():
                 warmup_task.cancel()
+            if not schedule_task.done():
+                schedule_task.cancel()
             jobs_service.close(wait=True)
 
     app = FastAPI(
         title="Publishing Workspace Schedule API",
         lifespan=lifespan,
     )
+    paths, config = load_workspace(publishing_root)
     app.state.publishing_root = publishing_root
+    app.state.workspace_paths = paths
+    app.state.workspace_config = config
+    app.state.catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
     app.state.export_jobs = jobs_service
 
     @app.exception_handler(PlanRevisionConflictError)
@@ -178,6 +206,7 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
         action_group: str | None = None,
         action: str | None = None,
         facets: str | None = None,
+        sort_by: str = "order_asc",
         limit: int = Query(default=100, ge=1, le=1000),
     ):
         parsed_facets: dict[str, set[str]] = {}
@@ -200,6 +229,7 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
             action_group=action_group,
             action=action,
             facets=parsed_facets,
+            sort_by=sort_by,
             limit=limit,
         )
         return [
@@ -212,35 +242,74 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
         role: str,
         q: str = "",
         import_id: str | None = None,
+        import_ids: str | None = None,
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=20, ge=1, le=100),
     ):
+        parsed_import_ids: list[str] | None = None
+        if import_ids:
+            try:
+                raw_ids = json.loads(import_ids)
+                if isinstance(raw_ids, list):
+                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
+                elif isinstance(raw_ids, str):
+                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
+            except Exception:
+                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
+        elif import_id and import_id != "__all__":
+            parsed_import_ids = [import_id.strip()]
+
         return NodeSearchService().search(
             app.state.publishing_root,
             role=role,
             query=q,
             import_id=import_id,
+            import_ids=parsed_import_ids,
             offset=offset,
             limit=limit,
         ).model_dump(mode="json", by_alias=True)
 
     @app.get("/api/assets/facets")
-    def asset_facets(import_id: str | None = None):
-        return AssetSearchService().facets(app.state.publishing_root, import_id=import_id)
+    def asset_facets(import_id: str | None = None, import_ids: str | None = None):
+        parsed_import_ids: list[str] | None = None
+        if import_ids:
+            try:
+                raw_ids = json.loads(import_ids)
+                if isinstance(raw_ids, list):
+                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
+                elif isinstance(raw_ids, str):
+                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
+            except Exception:
+                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
+        elif import_id and import_id != "__all__":
+            parsed_import_ids = [import_id.strip()]
+
+        return AssetSearchService().facets(app.state.publishing_root, import_id=import_id, import_ids=parsed_import_ids)
 
     @app.get("/api/imports")
     def list_imports():
-        paths, _ = load_workspace(app.state.publishing_root)
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
-        return [
-            {"import_id": import_id, "source_ref": source_ref}
-            for import_id, source_ref in catalog.import_sources()
-        ]
+        catalog = getattr(app.state, "catalog", None)
+        if catalog is None:
+            paths, _ = load_workspace(app.state.publishing_root)
+            catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+            app.state.catalog = catalog
+        return catalog.list_imports_summary()
+
+    @app.get("/api/tags")
+    def list_tags():
+        catalog = getattr(app.state, "catalog", None)
+        if catalog is None:
+            paths, _ = load_workspace(app.state.publishing_root)
+            catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+            app.state.catalog = catalog
+        return catalog.get_all_tags()
 
     @app.get("/api/tasks")
     def list_tasks():
         """返回可被月历引用的已有投稿任务，不读取任务选择图片。"""
-        paths, _ = load_workspace(app.state.publishing_root)
+        paths = getattr(app.state, "workspace_paths", None)
+        if paths is None:
+            paths, _ = load_workspace(app.state.publishing_root)
         tasks_root = paths.tasks
         if not tasks_root.is_dir():
             return []
@@ -258,13 +327,15 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
 
     @app.get("/api/assets/{asset_id}/preview")
     def asset_preview(asset_id: str):
-        paths, _ = load_workspace(app.state.publishing_root)
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
-        assets = catalog.assets_by_ids([asset_id])
-        asset = assets.get(asset_id)
-        if asset is None or not Path(asset.path).is_file():
+        catalog = getattr(app.state, "catalog", None)
+        if catalog is None:
+            paths, _ = load_workspace(app.state.publishing_root)
+            catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+            app.state.catalog = catalog
+        path = catalog.get_asset_path(asset_id)
+        if path is None or not Path(path).is_file():
             raise KeyError(f"Catalog 中找不到可预览资产：{asset_id}")
-        return FileResponse(asset.path)
+        return FileResponse(path)
 
     register_library_routes(app)
 

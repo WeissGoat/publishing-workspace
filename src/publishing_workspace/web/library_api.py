@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from ..catalog.repository import CatalogRepository
 from ..config import load_workspace
+from ..logging import get_logger
 from ..plans.search import AssetSearchFilter, AssetSearchService
 from ..submissions.models import PixivMetadata, SubmissionRevisionConflictError
 from ..submissions.pixiv_metadata import (
@@ -22,7 +24,13 @@ from ..submissions.pixiv_metadata import (
     suggest_tags_from_pixiv_sync,
 )
 from ..submissions.pixiv_uploader import PixivUploadService
+from ..submissions.repository import SubmissionRepository
 from ..submissions.service import SubmissionService
+from ..tasks.paths import TaskPaths
+from ..tasks.repository import TaskRepository
+
+
+logger = get_logger(__name__)
 
 
 class PixivPublishRequest(BaseModel):
@@ -30,7 +38,15 @@ class PixivPublishRequest(BaseModel):
     force_republish: bool = False
 
 
+class SchedulePublishRequest(BaseModel):
+    enable: bool = True
+    scheduled_at: str | None = None
+    allow_delay: bool = False
+    max_delay_minutes: int = 0
+
+
 class SubmissionMutation(BaseModel):
+    task_id: str | None = None
     revision: int | None = Field(default=None, ge=1)
     title: str
     source_import_id: str | None = None
@@ -54,10 +70,13 @@ def _sync_submission_schedule(
     task_id: str,
     title: str,
     scheduled_at: str | None,
+    publish: bool | None = None,
+    allow_delay: bool | None = None,
+    max_delay_minutes: int | None = None,
 ) -> None:
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from ..plans.models import ScheduleEntry, TaskContent
+    from ..plans.models import ExecutionPolicy, ScheduleEntry, TaskContent
     from ..service import PublishingService
 
     if not scheduled_at or not scheduled_at.strip():
@@ -88,13 +107,28 @@ def _sync_submission_schedule(
                 existing_entry = e
                 break
 
+        exec_policy = ExecutionPolicy()
+        if existing_entry is not None:
+            exec_policy = existing_entry.execution
+        
+        update_dict = {}
+        if publish is not None:
+            update_dict["publish"] = publish
+            update_dict["build_on_due"] = True
+        if allow_delay is not None:
+            update_dict["allow_delay"] = allow_delay
+        if max_delay_minutes is not None:
+            update_dict["max_delay_minutes"] = max_delay_minutes
+        if update_dict:
+            exec_policy = exec_policy.model_copy(update=update_dict)
+
         if existing_entry is not None:
             new_entry = ScheduleEntry(
                 entry_id=existing_entry.entry_id,
                 scheduled_at=dt,
                 title=title or existing_entry.title,
                 content=TaskContent(task_id=task_id),
-                execution=existing_entry.execution,
+                execution=exec_policy,
             )
             svc.schedule_update_entry(root, month_str, new_entry, expected_revision=plan.revision)
         else:
@@ -103,20 +137,21 @@ def _sync_submission_schedule(
                 scheduled_at=dt,
                 title=title,
                 content=TaskContent(task_id=task_id),
+                execution=exec_policy,
             )
             svc.schedule_add_entry(root, month_str, new_entry, expected_revision=plan.revision)
     except Exception:
         pass
 
 
-def _find_task_scheduled_at(root: Path, task_id: str) -> str | None:
+def _find_task_schedule_info(root: Path, task_id: str) -> dict[str, Any]:
     from ..plans.models import TaskContent
     from ..service import PublishingService
     from ..config import load_workspace
 
     paths, _ = load_workspace(root)
     if not paths.plans.is_dir():
-        return None
+        return {}
 
     try:
         for plan_dir in paths.plans.iterdir():
@@ -125,12 +160,69 @@ def _find_task_scheduled_at(root: Path, task_id: str) -> str | None:
                     plan = PublishingService().schedule_show(root, plan_dir.name)
                     for e in plan.entries:
                         if isinstance(e.content, TaskContent) and e.content.task_id == task_id:
-                            return e.scheduled_at.isoformat()
+                            return {
+                                "scheduled_at": e.scheduled_at.isoformat(),
+                                "scheduled_publish": bool(e.execution.publish),
+                                "allow_delay": bool(getattr(e.execution, "allow_delay", False)),
+                                "max_delay_minutes": int(getattr(e.execution, "max_delay_minutes", 0) or 0),
+                                "build_on_due": bool(e.execution.build_on_due),
+                                "entry_id": e.entry_id,
+                                "month": plan_dir.name,
+                            }
                 except Exception:
                     pass
     except Exception:
         pass
-    return None
+    return {}
+
+
+def _find_task_scheduled_at(root: Path, task_id: str) -> str | None:
+    info = _find_task_schedule_info(root, task_id)
+    return info.get("scheduled_at")
+
+
+def _set_task_schedule_publish(
+    root: Path,
+    task_id: str,
+    enable: bool,
+    allow_delay: bool = False,
+    max_delay_minutes: int = 0,
+) -> bool:
+    from ..plans.models import TaskContent, ScheduleEntry
+    from ..service import PublishingService
+    from ..config import load_workspace
+
+    paths, _ = load_workspace(root)
+    if not paths.plans.is_dir():
+        return False
+
+    svc = PublishingService()
+    for plan_dir in paths.plans.iterdir():
+        if plan_dir.is_dir() and (plan_dir / "plan.yaml").is_file():
+            try:
+                plan = svc.schedule_show(root, plan_dir.name)
+                for e in plan.entries:
+                    if isinstance(e.content, TaskContent) and e.content.task_id == task_id:
+                        new_exec = e.execution.model_copy(
+                            update={
+                                "publish": enable,
+                                "build_on_due": True,
+                                "allow_delay": allow_delay if enable else False,
+                                "max_delay_minutes": max_delay_minutes if enable else 0,
+                            }
+                        )
+                        new_entry = ScheduleEntry(
+                            entry_id=e.entry_id,
+                            scheduled_at=e.scheduled_at,
+                            title=e.title,
+                            content=e.content,
+                            execution=new_exec,
+                        )
+                        svc.schedule_update_entry(root, plan_dir.name, new_entry, expected_revision=plan.revision)
+                        return True
+            except Exception:
+                pass
+    return False
 
 
 def register_library_routes(app: FastAPI) -> None:
@@ -141,15 +233,18 @@ def register_library_routes(app: FastAPI) -> None:
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=60, ge=1, le=200),
         import_id: str | None = None,
+        import_ids: str | None = None,
         text: str = "",
         artist: str | None = None,
         character: str | None = None,
         action_group: str | None = None,
         action: str | None = None,
         facets: str | None = None,
+        tags: str | None = None,
         posted: bool | None = None,
         favorite_mode: str = "all",
         favorite_ids: str | None = None,
+        sort_by: str = "order_asc",
     ):
         parsed_facets: dict[str, set[str]] = {}
         if facets:
@@ -175,29 +270,103 @@ def register_library_routes(app: FastAPI) -> None:
             except Exception:
                 parsed_fav_ids = {x.strip() for x in favorite_ids.split(",") if x.strip()}
 
+        parsed_tags: set[str] = set()
+        if tags:
+            try:
+                raw_tags = json.loads(tags)
+                if isinstance(raw_tags, list):
+                    parsed_tags = {str(x).strip() for x in raw_tags if str(x).strip()}
+                elif isinstance(raw_tags, str):
+                    parsed_tags = {x.strip() for x in raw_tags.split(",") if x.strip()}
+            except Exception:
+                parsed_tags = {x.strip() for x in tags.split(",") if x.strip()}
+
+        parsed_import_ids: list[str] | None = None
+        if import_ids:
+            try:
+                raw_ids = json.loads(import_ids)
+                if isinstance(raw_ids, list):
+                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
+                elif isinstance(raw_ids, str):
+                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
+            except Exception:
+                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
+        elif import_id and import_id != "__all__":
+            parsed_import_ids = [import_id.strip()]
+
         fav_mode = favorite_mode if favorite_mode in {"all", "favorited", "unfavorited"} else "all"
 
         filters = AssetSearchFilter(
             offset=offset,
             limit=limit,
             import_id=import_id,
+            import_ids=parsed_import_ids,
             text=text,
             artist=artist,
             character=character,
             action_group=action_group,
             action=action,
             facets=parsed_facets,
+            tags=parsed_tags,
             posted=posted,
             favorite_mode=fav_mode,
             favorite_ids=parsed_fav_ids,
+            sort_by=sort_by,
         )
-        return AssetSearchService().search_page(
-            app.state.publishing_root, filters
-        ).model_dump(mode="json", by_alias=True)
+        t0 = time.perf_counter()
+        catalog = getattr(app.state, "catalog", None)
+        page_res = AssetSearchService().search_page(
+            app.state.publishing_root, filters, catalog=catalog
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        snap_label = (
+            ",".join(parsed_import_ids)
+            if parsed_import_ids
+            else (import_id or "全部")
+        )
+        logger.info(
+            "🔍 素材检索: 快照=%s offset=%d limit=%d 排序=%s 过滤=[字:%s 词:%s 标:%s] -> 命中 %d/%d 项 (耗时: %.1fms)",
+            snap_label,
+            offset,
+            limit,
+            sort_by,
+            text or "-",
+            artist or character or action_group or action or "-",
+            ",".join(parsed_tags) if parsed_tags else "-",
+            len(page_res.items),
+            page_res.total,
+            elapsed_ms,
+        )
+        return page_res.model_dump(mode="json", by_alias=True)
 
     @app.get("/api/library/facets")
-    def library_facets(import_id: str | None = None):
-        return AssetSearchService().facets(app.state.publishing_root, import_id=import_id)
+    def library_facets(import_id: str | None = None, import_ids: str | None = None):
+        catalog = getattr(app.state, "catalog", None)
+        parsed_import_ids: list[str] | None = None
+        if import_ids:
+            try:
+                raw_ids = json.loads(import_ids)
+                if isinstance(raw_ids, list):
+                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
+                elif isinstance(raw_ids, str):
+                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
+            except Exception:
+                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
+        elif import_id and import_id != "__all__":
+            parsed_import_ids = [import_id.strip()]
+
+        return AssetSearchService().facets(
+            app.state.publishing_root, import_id=import_id, import_ids=parsed_import_ids, catalog=catalog
+        )
+
+    @app.get("/api/library/tags")
+    def library_tags():
+        catalog = getattr(app.state, "catalog", None)
+        if catalog is None:
+            paths, _ = load_workspace(app.state.publishing_root)
+            catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+            app.state.catalog = catalog
+        return catalog.get_all_tags()
 
     @app.get("/api/submissions")
     def list_submissions():
@@ -212,7 +381,25 @@ def register_library_routes(app: FastAPI) -> None:
             sub = SubmissionService().get(
                 app.state.publishing_root, task_id
             ).model_dump(mode="json")
-            sub["scheduled_at"] = _find_task_scheduled_at(app.state.publishing_root, task_id)
+            sched_info = _find_task_schedule_info(app.state.publishing_root, task_id)
+            sub["scheduled_at"] = sched_info.get("scheduled_at")
+            sub["scheduled_publish"] = sched_info.get("scheduled_publish", False)
+            sub["allow_delay"] = sched_info.get("allow_delay", False)
+            sub["max_delay_minutes"] = sched_info.get("max_delay_minutes", 0)
+
+            try:
+                paths, _ = load_workspace(app.state.publishing_root)
+                t_paths = TaskPaths.from_workspace(paths, task_id)
+                t_cfg = TaskRepository.load(t_paths)
+                m_op = t_cfg.processing.operations.get("mosaic")
+                if m_op:
+                    sub["mosaic_options"] = {
+                        "enabled": bool(m_op.enabled),
+                        "pixel_size": int(m_op.options.get("pixel_size", 10)) if m_op.options else 10,
+                    }
+            except Exception:
+                pass
+
             return sub
         except FileNotFoundError as exc:
             return JSONResponse(
@@ -225,7 +412,7 @@ def register_library_routes(app: FastAPI) -> None:
         try:
             detail = SubmissionService().create_or_update(
                 app.state.publishing_root,
-                task_id=None,
+                task_id=payload.task_id,
                 title=payload.title,
                 source_import_id=payload.source_import_id,
                 sets=payload.sets,
@@ -241,6 +428,8 @@ def register_library_routes(app: FastAPI) -> None:
                 )
             result = detail.model_dump(mode="json")
             result["scheduled_at"] = payload.scheduled_at
+            total_images = sum(len(v) for v in detail.sets.values()) if detail.sets else 0
+            logger.info("💾 创建投稿任务: task_id=%s title=%r 图片数=%d 定时=%s", detail.task_id, detail.title, total_images, payload.scheduled_at or "无")
             return result
         except SubmissionRevisionConflictError as exc:
             return JSONResponse(
@@ -279,6 +468,8 @@ def register_library_routes(app: FastAPI) -> None:
                 )
             result = detail.model_dump(mode="json")
             result["scheduled_at"] = payload.scheduled_at
+            total_images = sum(len(v) for v in detail.sets.values()) if detail.sets else 0
+            logger.info("💾 更新投稿任务: task_id=%s title=%r 图片数=%d 定时=%s", detail.task_id, detail.title, total_images, payload.scheduled_at or "无")
             return result
         except SubmissionRevisionConflictError as exc:
             return JSONResponse(
@@ -395,6 +586,7 @@ def register_library_routes(app: FastAPI) -> None:
         payload: PixivPublishRequest | None = None,
     ):
         req_payload = payload or PixivPublishRequest()
+        logger.info("🚀 收到 Pixiv 手动发布请求: task_id=%s force_rebuild=%s force_republish=%s", task_id, req_payload.force_rebuild, req_payload.force_republish)
         uploader = PixivUploadService()
         result = uploader.publish_task(
             app.state.publishing_root,
@@ -412,6 +604,7 @@ def register_library_routes(app: FastAPI) -> None:
                 status_code = 400
             elif result.error_code == "captcha_required":
                 status_code = 429
+            logger.warning("❌ Pixiv 手动发布失败: task_id=%s code=%s error=%s", task_id, result.error_code, result.error)
             return JSONResponse(
                 status_code=status_code,
                 content={
@@ -423,6 +616,7 @@ def register_library_routes(app: FastAPI) -> None:
                     }
                 },
             )
+        logger.info("🎉 Pixiv 手动发布成功: task_id=%s illust_id=%s", task_id, result.illust_id)
         return {
             "success": True,
             "task_id": result.task_id,
@@ -430,6 +624,131 @@ def register_library_routes(app: FastAPI) -> None:
             "pixiv_url": result.pixiv_url,
             "published_at": result.published_at,
             "message": f"发布成功！作品 PID: {result.illust_id}",
+        }
+
+    @app.post("/api/submissions/{task_id}/schedule-publish")
+    def toggle_schedule_publish(task_id: str, payload: SchedulePublishRequest | None = None):
+        req_payload = payload or SchedulePublishRequest()
+        root = app.state.publishing_root
+        paths, config = load_workspace(root)
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        if not task_paths.task_yaml.is_file():
+            return JSONResponse(
+                status_code=404,
+                content={"detail": {"code": "task_not_found", "message": f"投稿任务不存在: {task_id}"}},
+            )
+
+        submission = SubmissionRepository.load(task_paths)
+        if submission is None:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": {"code": "submission_not_found", "message": f"投稿记录不存在: {task_id}"}},
+            )
+
+        # 取消定时发布
+        if not req_payload.enable:
+            _set_task_schedule_publish(root, task_id, enable=False)
+            logger.info("⏰ 取消定时发布: task_id=%s", task_id)
+            return {"success": True, "message": "已取消定时发布", "scheduled_publish": False}
+
+        # 开启定时发布：严格校验所有必填参数
+        sched_info = _find_task_schedule_info(root, task_id)
+        scheduled_at_str = req_payload.scheduled_at or sched_info.get("scheduled_at")
+        if not scheduled_at_str or not scheduled_at_str.strip():
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "missing_scheduled_at", "message": "请先设置定时发布的时间（日期与时间）"}},
+            )
+
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            dt = datetime.fromisoformat(scheduled_at_str.strip())
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+        except Exception as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "invalid_scheduled_at", "message": f"定时时间格式不合法: {exc}"}},
+            )
+
+        # 校验标题
+        title = ((submission.pixiv.title if submission.pixiv else "") or submission.title or "").strip()
+        if not title:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "missing_title", "message": "投稿标题不能为空"}},
+            )
+
+        # 校验标签（1~10 个）
+        tags = (submission.pixiv.tags if submission.pixiv else []) or config.pixiv.default_tags
+        tags = [str(t).strip() for t in tags if str(t).strip()]
+        if not tags:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "missing_tags", "message": "投稿标签不能为空，请至少添加 1 个标签"}},
+            )
+        if len(tags) > 10:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "too_many_tags", "message": f"Pixiv 标签数量不能超过 10 个（当前有 {len(tags)} 个）"}},
+            )
+
+        # 校验图片集合
+        sets = submission.sets or {}
+        post_imgs = sets.get("post") or sets.get("all") or []
+        if not post_imgs:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "missing_images", "message": "投稿图片集合为空，请至少选择 1 张图片"}},
+            )
+
+        # 校验 Pixiv Cookie
+        cookie = (config.pixiv.pixiv_cookie or os.environ.get("PIXIV_COOKIE", "")).strip()
+        if not cookie:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "missing_cookie", "message": "未配置 Pixiv Cookie，无法开启定时发布，请在 workspace.yaml 中配置 pixiv.pixiv_cookie"}},
+            )
+
+        # 校验是否已有导出的发布构建包
+        task_paths = TaskPaths.from_workspace(paths, task_id)
+        latest_manifest = task_paths.builds_root / "latest" / "manifest.json"
+        latest_build_manifest = task_paths.builds_root / "latest" / "build_manifest.json"
+        if not latest_manifest.is_file() and not latest_build_manifest.is_file():
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"code": "missing_build_package", "message": "当前投稿尚未导出构建包，请先点击【开始导出】生成发布包并确认打码效果，再开启定时自动发布。"}},
+            )
+
+        # 同步写入排期计划并开启 publish=True
+        _sync_submission_schedule(
+            root,
+            task_id,
+            title,
+            dt.isoformat(),
+            publish=True,
+            allow_delay=req_payload.allow_delay,
+            max_delay_minutes=req_payload.max_delay_minutes,
+        )
+
+        if req_payload.allow_delay and req_payload.max_delay_minutes > 0:
+            from datetime import timedelta
+            end_dt = dt + timedelta(minutes=req_payload.max_delay_minutes)
+            time_window_str = f"{dt.strftime('%Y-%m-%d %H:%M')} - {end_dt.strftime('%Y-%m-%d %H:%M')}"
+        else:
+            time_window_str = dt.strftime("%Y-%m-%d %H:%M")
+
+        logger.info("⏰ 开启定时发布: task_id=%s 计划时间=%s (容差=%s分钟)", task_id, time_window_str, req_payload.max_delay_minutes if req_payload.allow_delay else 0)
+
+        return {
+            "success": True,
+            "message": f"⏰ 已成功开启定时发布！将于 {time_window_str} 自动发布到 Pixiv",
+            "scheduled_at": dt.isoformat(),
+            "scheduled_publish": True,
+            "allow_delay": req_payload.allow_delay,
+            "max_delay_minutes": req_payload.max_delay_minutes,
         }
 
     # 导出作业相关路由
@@ -441,6 +760,15 @@ def register_library_routes(app: FastAPI) -> None:
             body = {}
 
         enable_mosaic = body.get("enable_mosaic")
+        mosaic_pixel_size = body.get("mosaic_pixel_size")
+        if mosaic_pixel_size is not None:
+            try:
+                mosaic_pixel_size = int(mosaic_pixel_size)
+            except (ValueError, TypeError):
+                mosaic_pixel_size = 10
+        else:
+            mosaic_pixel_size = 10
+
         if enable_mosaic is not None:
             try:
                 from ..config import load_workspace
@@ -459,6 +787,7 @@ def register_library_routes(app: FastAPI) -> None:
                             "detector": "yolo_sam",
                             "method": "pixel",
                             "parts": ["penis", "pussy"],
+                            "pixel_size": mosaic_pixel_size,
                         },
                     )
                     TaskRepository.save(task_paths, task_config)
@@ -466,7 +795,12 @@ def register_library_routes(app: FastAPI) -> None:
                 logger.warning("更新任务打码配置失败：%s", e)
 
         try:
-            job = app.state.export_jobs.start(app.state.publishing_root, task_id, enable_mosaic=enable_mosaic)
+            job = app.state.export_jobs.start(
+                app.state.publishing_root,
+                task_id,
+                enable_mosaic=enable_mosaic,
+                mosaic_pixel_size=mosaic_pixel_size,
+            )
             status_code = 202 if job.status == "queued" else 200
             return JSONResponse(
                 status_code=status_code,
@@ -589,13 +923,15 @@ def register_library_routes(app: FastAPI) -> None:
                 opts = mosaic_op.options if mosaic_op and mosaic_op.options else {}
                 detector = opts.get("detector", "yolo_sam")
                 method = opts.get("method", "pixel")
+                psize = opts.get("pixel_size", 10)
                 parts = opts.get("parts", ["penis", "pussy"])
                 parts_str = ", ".join(parts) if isinstance(parts, list) else str(parts)
+                method_desc = f"{method} (强度 {psize}px)" if method == "pixel" else method
                 operations.append({
                     "name": "mosaic",
                     "title": "AI 智能自动打码 (Auto Mosaic)",
                     "enabled": True,
-                    "description": f"已启用自动打码：检测器 [{detector}]，方式 [{method}]，检测部位 [{parts_str}]",
+                    "description": f"已启用自动打码：检测器 [{detector}]，方式 [{method_desc}]，检测部位 [{parts_str}]",
                 })
             else:
                 operations.append({
@@ -633,6 +969,14 @@ def register_library_routes(app: FastAPI) -> None:
                         "size_bytes": f.stat().st_size,
                     })
 
+        mosaic_options = {"enabled": True, "pixel_size": 10}
+        if proc_config:
+            mosaic_op = proc_config.operations.get("mosaic")
+            if mosaic_op:
+                mosaic_options["enabled"] = bool(mosaic_op.enabled)
+                if mosaic_op.options:
+                    mosaic_options["pixel_size"] = int(mosaic_op.options.get("pixel_size", 10))
+
         return {
             "has_build": True,
             "build_id": build_id,
@@ -640,6 +984,7 @@ def register_library_routes(app: FastAPI) -> None:
             "exported_at": exported_at,
             "manifest": manifest_data,
             "operations": operations,
+            "mosaic_options": mosaic_options,
             "images": images,
             "archives": archives,
         }
@@ -715,18 +1060,45 @@ def register_library_routes(app: FastAPI) -> None:
         if not build_dir:
             raise HTTPException(status_code=404, detail="Build not found")
 
-        target_file = build_dir / "output" / selection / filename
-        if not target_file.is_file():
+        output_root = build_dir / "output"
+        updated_selections: list[str] = []
+        if output_root.is_dir():
+            for sel in ("all", "post", "cover"):
+                target_file = output_root / sel / filename
+                if target_file.is_file():
+                    tmp_file = target_file.with_name(f".{target_file.name}.{os.getpid()}.tmp")
+                    tmp_file.write_bytes(body)
+                    os.replace(tmp_file, target_file)
+                    updated_selections.append(sel)
+
+        if not updated_selections:
             raise HTTPException(status_code=404, detail="Image not found in build")
 
-        tmp_file = target_file.with_name(f".{target_file.name}.tmp")
-        tmp_file.write_bytes(body)
-        os.replace(tmp_file, target_file)
+        # 同步更新 zip 归档（如果存在）
+        from ..packages.builder import _write_zip
+        archives_root = build_dir / "archives"
+        if archives_root.is_dir():
+            for sel in updated_selections:
+                archive = archives_root / f"{sel}.zip"
+                if archive.is_file():
+                    try:
+                        _write_zip(archive, output_root / sel)
+                    except Exception as exc:
+                        logger.warning("同步更新 zip 归档失败: %s - %s", archive, exc)
+
+        logger.info(
+            "✏️ 手动打码保存: task_id=%s filename=%s 同步更新集合=%s (大小=%d 字节)",
+            task_id,
+            filename,
+            updated_selections,
+            len(body),
+        )
 
         return {
             "success": True,
             "filename": filename,
             "selection": selection,
+            "updated_selections": updated_selections,
             "size_bytes": len(body),
         }
 
@@ -855,7 +1227,7 @@ def register_library_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=500, detail=f"打开文件所在文件夹失败: {exc}")
 
     @app.get("/api/favorites")
-    def get_favorites(import_id: str | None = None):
+    def get_favorites(import_id: str | None = None, import_ids: str | None = None):
         from ..catalog.repository import CatalogRepository
         from ..config import load_workspace
 
@@ -863,10 +1235,26 @@ def register_library_routes(app: FastAPI) -> None:
         catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
         marks_map = catalog.all_asset_marks()
         fav_ids = [asset_id for asset_id, marks in marks_map.items() if "favorite" in marks]
-        if import_id and import_id != "__all__":
+
+        parsed_import_ids: list[str] | None = None
+        if import_ids:
+            try:
+                raw_ids = json.loads(import_ids)
+                if isinstance(raw_ids, list):
+                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
+                elif isinstance(raw_ids, str):
+                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
+            except Exception:
+                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
+        elif import_id and import_id != "__all__":
+            parsed_import_ids = [import_id.strip()]
+
+        if parsed_import_ids:
             with catalog.connection() as conn:
+                placeholders = ",".join("?" for _ in parsed_import_ids)
                 rows = conn.execute(
-                    "SELECT asset_id FROM import_items WHERE import_id=?", (import_id,)
+                    f"SELECT asset_id FROM import_items WHERE import_id IN ({placeholders})",
+                    parsed_import_ids,
                 ).fetchall()
                 snapshot_assets = {r["asset_id"] for r in rows if r["asset_id"]}
             fav_ids = [aid for aid in fav_ids if aid in snapshot_assets]
@@ -1075,6 +1463,8 @@ def register_library_routes(app: FastAPI) -> None:
         marks = catalog.all_asset_marks().get(asset_id, [])
         is_fav = "favorite" in marks
         is_posted = any(m == "posted" or m.startswith("posted:") for m in marks)
+        tags = [m[4:] for m in marks if m.startswith("tag:")]
+        snapshots = catalog.snapshots_for_asset(asset_id)
 
         return {
             "asset_id": asset.asset_id,
@@ -1086,8 +1476,19 @@ def register_library_routes(app: FastAPI) -> None:
             "is_favorited": is_fav,
             "is_posted": is_posted,
             "marks": marks,
+            "tags": tags,
+            "snapshots": snapshots,
             "generation_info": gen_info,
         }
+
+    @app.get("/api/assets/{asset_id}/snapshots")
+    def get_asset_snapshots(asset_id: str):
+        from ..catalog.repository import CatalogRepository
+        from ..config import load_workspace
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        catalog = getattr(app.state, "catalog", None) or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        return {"asset_id": asset_id, "snapshots": catalog.snapshots_for_asset(asset_id)}
 
     @app.post("/api/assets/{asset_id}/reveal")
     def reveal_asset_file(asset_id: str):
@@ -1131,3 +1532,90 @@ def register_library_routes(app: FastAPI) -> None:
                 )
                 conn.commit()
         return {"asset_id": asset_id, "posted": posted}
+
+    @app.post("/api/assets/{asset_id}/inpaint")
+    async def generate_asset_inpaint(asset_id: str, req: Request):
+        import base64
+        from ..config import load_workspace
+        from ..inpaint.models import InpaintGenerateRequest
+        from ..inpaint.service import InpaintService
+
+        body = await req.json()
+        payload = InpaintGenerateRequest.model_validate(body)
+
+        mask_raw = payload.mask_base64
+        if "," in mask_raw:
+            mask_raw = mask_raw.split(",", 1)[1]
+        try:
+            mask_bytes = base64.b64decode(mask_raw)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Mask base64 解码失败: {exc}")
+
+        if not mask_bytes:
+            raise HTTPException(status_code=400, detail="Mask 数据不能为空")
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        service = InpaintService()
+        try:
+            res = await service.generate(
+                paths=paths,
+                asset_id=asset_id,
+                mask_bytes=mask_bytes,
+                prompt=payload.prompt,
+                negative_prompt=payload.negative_prompt,
+                strength=payload.strength,
+                count=payload.count,
+            )
+            return res.model_dump(mode="json")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            logger.error("AI 局部重绘生成失败: %s", exc)
+            raise HTTPException(status_code=500, detail=f"局部重绘生成失败: {exc}")
+
+    @app.get("/api/inpaint-cache/{session_id}/{filename}")
+    def get_inpaint_cache_image(session_id: str, filename: str):
+        from ..config import load_workspace
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        cache_file = paths.root / "tmp" / "inpaint" / session_id / filename
+        if not cache_file.is_file():
+            raise HTTPException(status_code=404, detail="未找到候选图片")
+
+        return FileResponse(cache_file, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+    @app.post("/api/assets/{asset_id}/inpaint/apply")
+    async def apply_asset_inpaint(asset_id: str, req: Request):
+        from ..config import load_workspace
+        from ..inpaint.models import ApplyCandidateRequest
+        from ..inpaint.service import InpaintService
+
+        body = await req.json()
+        payload = ApplyCandidateRequest.model_validate(body)
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        service = InpaintService()
+        try:
+            res = service.apply_candidate(
+                paths=paths,
+                asset_id=asset_id,
+                session_id=payload.session_id,
+                candidate_id=payload.candidate_id,
+            )
+            return res
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            logger.error("应用重绘候选图失败: %s", exc)
+            raise HTTPException(status_code=500, detail=f"应用重绘结果失败: {exc}")
+
+    @app.delete("/api/inpaint-cache/{session_id}")
+    def cleanup_inpaint_cache(session_id: str):
+        from ..config import load_workspace
+        from ..inpaint.service import InpaintService
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        service = InpaintService()
+        service.cleanup_session(paths, session_id)
+        return {"success": True, "session_id": session_id}
+

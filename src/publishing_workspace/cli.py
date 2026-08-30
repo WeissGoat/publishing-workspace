@@ -53,7 +53,59 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="强制重试相同文件指纹的 open problem",
     )
+    import_parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="为本次导入快照及所含图片打上标签（可多次指定，默认不打标签）",
+    )
+    import_parser.add_argument(
+        "--tags",
+        default=None,
+        help="逗号分隔的标签列表，例如 'tag1,tag2'",
+    )
     import_parser.set_defaults(func=cmd_import)
+
+    import_secondary_parser = commands.add_parser(
+        "import-secondary",
+        help="从精选子集（播放列表/目录）执行二次筛选导入，默认打上'二次筛选'标签",
+    )
+    _add_log_argument(import_secondary_parser)
+    import_secondary_parser.add_argument("root", help="Publishing 根目录")
+    import_secondary_parser.add_argument("source", help="输入精选播放列表、目录或快捷方式")
+    import_secondary_parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="二次筛选标签（可多次指定，未显式指定时默认为 '二次筛选'）",
+    )
+    import_secondary_parser.add_argument(
+        "--tags",
+        default=None,
+        help="逗号分隔的附加标签列表",
+    )
+    import_secondary_parser.add_argument(
+        "--input-type",
+        choices=("neev_playlist", "directory", "shortcut"),
+        help="显式指定输入适配器；默认自动探测",
+    )
+    import_secondary_parser.add_argument("--recursive", action="store_true", help="递归扫描目录")
+    import_secondary_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="遇到缺失、损坏或不支持的图片时立即失败",
+    )
+    import_secondary_parser.add_argument(
+        "--legacy-tolerant",
+        action="store_true",
+        help="显式允许旧 NeeView JSON 的宽松控制字符解析",
+    )
+    import_secondary_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="强制重试相同文件指纹的 open problem",
+    )
+    import_secondary_parser.set_defaults(func=cmd_import_secondary)
 
     status_parser = commands.add_parser("status", help="查看 ImportRun 状态")
     _add_log_argument(status_parser)
@@ -127,6 +179,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="一次性迁移用的模型目录；不传时按 manifest URL 下载",
     )
     mosaic_install_parser.set_defaults(func=cmd_mosaic_install)
+
+    mosaic_test_parser = mosaic_commands.add_parser("test", help="测试图片自动打码并生成多强度对比效果图与HTML报告")
+    _add_log_argument(mosaic_test_parser)
+    mosaic_test_parser.add_argument("image", help="待测试打码的源图片路径")
+    mosaic_test_parser.add_argument("-o", "--output-dir", help="输出结果目录")
+    mosaic_test_parser.add_argument("-d", "--detector", choices=("yolo", "yolo_sam"), default="yolo_sam", help="检测器")
+    mosaic_test_parser.add_argument("-m", "--method", choices=("pixel", "blur", "all"), default="pixel", help="打码方式")
+    mosaic_test_parser.add_argument("-s", "--strengths", type=int, nargs="+", default=[6, 10, 14, 18, 24, 32, 48, 64], help="像素马赛克大小强度列表")
+    mosaic_test_parser.add_argument("-b", "--blur-radii", type=int, nargs="+", default=[4, 8, 12, 16, 24, 36, 48], help="高斯模糊半径列表")
+    mosaic_test_parser.add_argument("-p", "--parts", default="female_nipple,pussy,penis", help="检测部位列表")
+    mosaic_test_parser.add_argument("--model-dir", help="模型目录")
+    mosaic_test_parser.add_argument("--open", action="store_true", help="处理完成后在浏览器打开对比报告")
+    mosaic_test_parser.set_defaults(func=cmd_mosaic_test)
 
     task_parser = commands.add_parser("task", help="投稿任务管理")
     task_commands = task_parser.add_subparsers(dest="task_command")
@@ -296,10 +361,43 @@ def cmd_init(args) -> int:
     return 0
 
 
+def _parse_tags(args, default_tag: str | None = None) -> list[str] | None:
+    tags: list[str] = []
+    if getattr(args, "tag", None):
+        for t in args.tag:
+            if isinstance(t, list):
+                tags.extend([str(x).strip() for x in t if str(x).strip()])
+            elif isinstance(t, str):
+                tags.extend([x.strip() for x in t.split(",") if x.strip()])
+    if getattr(args, "tags", None):
+        tags.extend([x.strip() for x in str(args.tags).split(",") if x.strip()])
+    if not tags and default_tag:
+        tags.append(default_tag)
+    return tags if tags else None
+
+
 def cmd_import(args) -> int:
+    tags = _parse_tags(args, default_tag=None)
     result = PublishingService().import_source(
         args.root,
         args.source,
+        input_type=args.input_type,
+        recursive=args.recursive,
+        strict=args.strict,
+        legacy_tolerant=args.legacy_tolerant,
+        retry_failed=args.retry_failed,
+        tags=tags,
+    )
+    _print_json(result.model_dump(mode="json"))
+    return 0
+
+
+def cmd_import_secondary(args) -> int:
+    tags = _parse_tags(args, default_tag="二次筛选")
+    result = PublishingService().import_secondary(
+        args.root,
+        args.source,
+        tags=tags,
         input_type=args.input_type,
         recursive=args.recursive,
         strict=args.strict,
@@ -406,6 +504,25 @@ def cmd_mosaic_install(args) -> int:
             "models": [item.as_dict() for item in statuses],
         }
     )
+    return 0
+
+
+def cmd_mosaic_test(args) -> int:
+    from scripts.test_auto_mosaic import run_mosaic_benchmark
+
+    parts_list = [p.strip() for p in args.parts.split(",") if p.strip()]
+    summary = run_mosaic_benchmark(
+        image_path=args.image,
+        output_dir=args.output_dir,
+        detector_name=args.detector,
+        parts=parts_list,
+        method=args.method,
+        strengths=args.strengths,
+        blur_radii=args.blur_radii,
+        model_dir=args.model_dir,
+        open_browser=args.open,
+    )
+    _print_json(summary)
     return 0
 
 
@@ -579,6 +696,10 @@ def cmd_web(args) -> int:
 
     from .web.schedule_api import create_app
 
+    print(
+        f"[Ready] Publishing Workspace Web 服务已启动并在后台监听: http://{args.host}:{args.port}/library",
+        flush=True,
+    )
     uvicorn.run(
         create_app(args.root),
         host=args.host,
@@ -602,7 +723,10 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
-    configure_logging(getattr(args, "log_level", None))
+    configure_logging(
+        level=getattr(args, "log_level", None),
+        workspace_root=getattr(args, "root", None),
+    )
     try:
         return args.func(args)
     except (KeyError, OSError, ValueError, RuntimeError) as exc:
