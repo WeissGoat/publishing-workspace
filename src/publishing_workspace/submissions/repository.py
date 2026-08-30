@@ -239,6 +239,7 @@ class SubmissionRepository:
                             plan_id=plan.plan_id,
                             entry_id=entry.entry_id,
                             scheduled_at=entry.scheduled_at.isoformat(),
+                            publish=bool(entry.execution.publish),
                         )
                         result.setdefault(task_id, []).append(ref)
             except Exception:

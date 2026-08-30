@@ -57,6 +57,57 @@ def test_build_pixiv_payload_general_age():
     assert payload["xRestrict"] == "general"
     assert payload["sexual"] == "false"
     assert payload["aiType"] == "notAiGenerated"
+    assert "crop[x]" not in payload
+    assert "crop[y]" not in payload
+
+
+def test_build_pixiv_payload_with_custom_crop():
+    pixiv_meta = PixivMetadata(
+        title="自定义缩略图",
+        r18=True,
+        crop_x=0.1458,
+        crop_y=0.0,
+    )
+    payload = build_pixiv_payload(pixiv_meta, 1)
+    assert payload["crop[x]"] == "0.1458"
+    assert payload["crop[y]"] == "0"
+
+
+def test_build_pixiv_payload_with_vertical_crop():
+    pixiv_meta = PixivMetadata(
+        title="竖图居中缩略图",
+        r18=False,
+        crop_x=0.0,
+        crop_y=0.25,
+    )
+    payload = build_pixiv_payload(pixiv_meta, 1)
+    assert payload["crop[x]"] == "0"
+    assert payload["crop[y]"] == "0.25"
+
+
+def test_build_pixiv_payload_with_single_axis_none_crop():
+    # 竖图只设置了 crop_y，crop_x 为 None
+    pixiv_meta = PixivMetadata(
+        title="竖图未指定X",
+        r18=True,
+        crop_x=None,
+        crop_y=0.091917,
+    )
+    payload = build_pixiv_payload(pixiv_meta, 1)
+    assert payload["crop[x]"] == "0"
+    assert payload["crop[y]"] == "0.091917"
+
+    # 横图只设置了 crop_x，crop_y 为 None
+    pixiv_meta_h = PixivMetadata(
+        title="横图未指定Y",
+        r18=True,
+        crop_x=0.123456,
+        crop_y=None,
+    )
+    payload_h = build_pixiv_payload(pixiv_meta_h, 1)
+    assert payload_h["crop[x]"] == "0.123456"
+    assert payload_h["crop[y]"] == "0"
+
 
 
 def test_collect_publishable_images(tmp_path: Path):

@@ -30,6 +30,7 @@ class ProcessingConfig(BaseModel):
                     "detector": "yolo_sam",
                     "method": "pixel",
                     "parts": ["penis", "pussy"],
+                    "pixel_size": 10,
                 },
             ),
         }

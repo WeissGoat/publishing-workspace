@@ -32,6 +32,10 @@ class PixivMetadata(BaseModel):
     allow_tag_edit: bool = True
     ai_type: bool = True
 
+    # ── 缩略图裁剪坐标 (Pixiv 官方 1:1 坐标比例 0.0~1.0) ──
+    crop_x: float | None = None
+    crop_y: float | None = None
+
     # ── 发布状态跟踪 ──
     illust_id: str | None = None
     published_at: str | None = None
@@ -111,6 +115,7 @@ class SubmissionScheduleRef(BaseModel):
     plan_id: NonEmptyText
     entry_id: NonEmptyText
     scheduled_at: str
+    publish: bool = False
 
 
 class SubmissionSummary(BaseModel):

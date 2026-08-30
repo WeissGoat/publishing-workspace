@@ -61,6 +61,8 @@ class ExecutionPolicy(BaseModel):
     build_on_due: bool = True
     notify_on_complete: bool = True
     publish: bool = False
+    allow_delay: bool = False
+    max_delay_minutes: int = 0
 
 
 class ScheduleEntry(BaseModel):
@@ -140,6 +142,8 @@ class ExecutionRecord(BaseModel):
     status: Literal["running", "completed", "failed"]
     build_id: str | None = None
     task_id: str | None = None
+    illust_id: str | None = None
+    published_at: str | None = None
     notification_status: Literal["pending", "sent", "failed", "disabled"] = "pending"
     error: str | None = None
     reason: Literal["due", "manual_preview", "retry"] = "due"

@@ -99,3 +99,20 @@ def test_submission_detail_and_summary():
     )
     assert summary.counts["all"] == 1
     assert len(summary.scheduled_entries) == 1
+
+
+def test_pixiv_metadata_crop_fields():
+    from publishing_workspace.submissions.models import PixivMetadata
+
+    meta = PixivMetadata(
+        title="测试",
+        crop_x=0.123456,
+        crop_y=0.0,
+    )
+    assert meta.crop_x == 0.123456
+    assert meta.crop_y == 0.0
+
+    dumped = meta.model_dump(mode="json")
+    assert dumped["crop_x"] == 0.123456
+    assert dumped["crop_y"] == 0.0
+

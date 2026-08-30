@@ -118,6 +118,19 @@ def build_pixiv_payload(
     if not is_r18:
         payload["sexual"] = "false"
 
+    if pixiv_meta.crop_x is not None or pixiv_meta.crop_y is not None:
+        try:
+            val_x = float(pixiv_meta.crop_x or 0.0)
+            payload["crop[x]"] = f"{val_x:.6f}".rstrip("0").rstrip(".") if val_x != 0 else "0"
+        except (ValueError, TypeError):
+            payload["crop[x]"] = str(pixiv_meta.crop_x or "0")
+
+        try:
+            val_y = float(pixiv_meta.crop_y or 0.0)
+            payload["crop[y]"] = f"{val_y:.6f}".rstrip("0").rstrip(".") if val_y != 0 else "0"
+        except (ValueError, TypeError):
+            payload["crop[y]"] = str(pixiv_meta.crop_y or "0")
+
     return generate_image_order(file_count, payload)
 
 
@@ -202,6 +215,16 @@ class PixivUploadService:
             default_tags=default_tags,
         )
 
+        crop_log = f"crop[x]={payload.get('crop[x]', '<默认>')}, crop[y]={payload.get('crop[y]', '<默认>')}"
+        logger.info(
+            "开始向 Pixiv 发起投稿请求: title=%r, tags=%s, xRestrict=%s, %s, 图片数量=%d",
+            payload.get("title"),
+            payload.get("tags[]"),
+            payload.get("xRestrict"),
+            crop_log,
+            len(image_paths),
+        )
+
         files = []
         file_handles = []
         try:
@@ -240,7 +263,7 @@ class PixivUploadService:
         if not convert_key:
             raise RuntimeError(f"Pixiv 未返回 convertKey：{resp.text[:200]}")
 
-        logger.info("Pixiv 上传请求已接受，convertKey=%s，开始轮询转码进度...", convert_key)
+        logger.info("Pixiv 上传请求已接受 (HTTP %d)，convertKey=%s，开始轮询转码进度...", resp.status_code, convert_key)
 
         # 轮询转码状态
         progress_url = f"{PIXIV_PROGRESS_URL}?convertKey={convert_key}&lang=zh"
@@ -300,6 +323,13 @@ class PixivUploadService:
             )
 
         pixiv_meta = submission.pixiv or PixivMetadata()
+        logger.info(
+            "准备发布任务 [%s]: title=%r, crop_x=%s, crop_y=%s",
+            task_id,
+            submission.title,
+            pixiv_meta.crop_x,
+            pixiv_meta.crop_y,
+        )
 
         # 防重复发布校验
         if pixiv_meta.illust_id and not force_republish:
@@ -368,6 +398,12 @@ class PixivUploadService:
             submission.pixiv = pixiv_meta
             SubmissionRepository.save(task_paths, submission)
 
+            try:
+                from ..plans.executor import SubmissionExecutor
+                SubmissionExecutor.set_last_publish_time(datetime.now(timezone.utc))
+            except Exception:
+                pass
+
             return PixivUploadResult(
                 success=True,
                 task_id=task_id,
@@ -385,6 +421,12 @@ class PixivUploadService:
             pixiv_meta.last_publish_error = err_msg
             submission.pixiv = pixiv_meta
             SubmissionRepository.save(task_paths, submission)
+
+            try:
+                from ..plans.executor import SubmissionExecutor
+                SubmissionExecutor.set_last_publish_time(datetime.now(timezone.utc))
+            except Exception:
+                pass
 
             return PixivUploadResult(
                 success=False,
