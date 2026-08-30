@@ -156,4 +156,12 @@ CREATE TABLE IF NOT EXISTS asset_marks (
     PRIMARY KEY (asset_id, mark)
 );
 CREATE INDEX IF NOT EXISTS idx_asset_marks_mark ON asset_marks(mark);
+
+CREATE TABLE IF NOT EXISTS asset_aliases (
+    old_asset_id TEXT PRIMARY KEY,
+    new_asset_id TEXT NOT NULL,
+    path TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_asset_aliases_new ON asset_aliases(new_asset_id);
 """

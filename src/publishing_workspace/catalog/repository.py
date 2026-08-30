@@ -579,8 +579,9 @@ class CatalogRepository:
                 "FROM import_items ii "
                 "JOIN imports i ON i.import_id = ii.import_id "
                 "WHERE ii.asset_id = ? "
+                "   OR ii.resolved_path = (SELECT path FROM asset_paths WHERE asset_id = ?) "
                 "ORDER BY i.created_at DESC, ii.source_order ASC",
-                (asset_id,),
+                (asset_id, asset_id),
             ).fetchall()
 
         results: list[dict[str, Any]] = []
@@ -609,6 +610,62 @@ class CatalogRepository:
             })
         return results
 
+    def record_asset_alias(self, old_asset_id: str, new_asset_id: str, path: str = "") -> None:
+        """记录资产别名映射（如重绘后原 SHA256 映射至新 SHA256）。"""
+        if not old_asset_id or not new_asset_id or old_asset_id == new_asset_id:
+            return
+        now = utc_now_iso()
+        with self.connection() as connection:
+            self._ensure_asset_aliases_table(connection)
+            # 更新已有将其他 ID 映射到 old_asset_id 的链路，指向最新的 new_asset_id
+            connection.execute(
+                "UPDATE asset_aliases SET new_asset_id=? WHERE new_asset_id=?",
+                (new_asset_id, old_asset_id),
+            )
+            connection.execute(
+                "INSERT INTO asset_aliases(old_asset_id, new_asset_id, path, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(old_asset_id) DO UPDATE SET new_asset_id=excluded.new_asset_id, "
+                "path=excluded.path, created_at=excluded.created_at",
+                (old_asset_id, new_asset_id, path, now),
+            )
+
+    def resolve_asset_id(self, asset_id: str) -> str:
+        """解析资产别名，若存在重命名/重绘映射链则返回最新生效的 asset_id。"""
+        if not asset_id:
+            return asset_id
+        with self.connection() as connection:
+            self._ensure_asset_aliases_table(connection)
+            current = asset_id
+            visited = {current}
+            while True:
+                row = connection.execute(
+                    "SELECT new_asset_id FROM asset_aliases WHERE old_asset_id=?",
+                    (current,),
+                ).fetchone()
+                if row and row["new_asset_id"]:
+                    nxt = str(row["new_asset_id"])
+                    if nxt in visited:
+                        break
+                    visited.add(nxt)
+                    current = nxt
+                else:
+                    break
+            return current
+
+    def _ensure_asset_aliases_table(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS asset_aliases ("
+            "    old_asset_id TEXT PRIMARY KEY,"
+            "    new_asset_id TEXT NOT NULL,"
+            "    path TEXT NOT NULL DEFAULT '',"
+            "    created_at TEXT NOT NULL"
+            ")"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_aliases_new ON asset_aliases(new_asset_id)"
+        )
+
     def assets_by_ids(
         self,
         asset_ids: Collection[str],
@@ -621,8 +678,13 @@ class CatalogRepository:
             return {}
 
         with self.connection() as connection:
+            self._ensure_asset_aliases_table(connection)
+            # 解析所有请求 ID 的最新别名
+            id_mapping: dict[str, str] = {aid: self.resolve_asset_id(aid) for aid in requested}
+            all_lookup_ids = list(dict.fromkeys(list(requested) + list(id_mapping.values())))
+
             source_rows: dict[str, sqlite3.Row] = {}
-            for chunk in _chunks(requested):
+            for chunk in _chunks(all_lookup_ids):
                 placeholders = ",".join("?" for _ in chunk)
                 if import_id is not None:
                     rows = connection.execute(
@@ -643,24 +705,62 @@ class CatalogRepository:
                 for row in rows:
                     source_rows.setdefault(str(row["asset_id"]), row)
 
+            # 容错降级：在全局查询模式 (import_id is None) 下，对于在 asset_paths 中未命中的 asset_id，尝试从 import_items 查找其历史关联路径
+            if import_id is None:
+                missing_ids = [aid for aid in all_lookup_ids if aid not in source_rows]
+                if missing_ids:
+                    for chunk in _chunks(missing_ids):
+                        placeholders = ",".join("?" for _ in chunk)
+                        fallback_rows = connection.execute(
+                            "SELECT asset_id, resolved_path, source_order, display_name "
+                            "FROM import_items "
+                            f"WHERE asset_id IN ({placeholders}) "
+                            "ORDER BY rowid DESC",
+                            chunk,
+                        ).fetchall()
+                        for row in fallback_rows:
+                            source_rows.setdefault(str(row["asset_id"]), row)
+
             result: dict[str, AssetRecord] = {}
             for asset_id in requested:
-                source_row = source_rows.get(asset_id)
+                resolved_id = id_mapping.get(asset_id, asset_id)
+                source_row = source_rows.get(resolved_id) or source_rows.get(asset_id)
                 if source_row is None:
                     continue
-                record = self._asset_from_db(
-                    connection,
-                    asset_id,
-                    preferred_path=Path(source_row["resolved_path"]),
-                )
-                if import_id is not None:
-                    record = record.model_copy(
-                        update={
-                            "source_order": int(source_row["source_order"]),
-                            "display_name": str(source_row["display_name"]),
-                        }
+                p_path = Path(source_row["resolved_path"]) if source_row["resolved_path"] else None
+                active_asset_id = resolved_id
+
+                # 若当前 active_asset_id 在 assets 表已不存在，尝试通过物理路径获取最新的 asset_id
+                if p_path and p_path.is_file():
+                    asset_exists = connection.execute(
+                        "SELECT 1 FROM assets WHERE asset_id=?", (active_asset_id,)
+                    ).fetchone()
+                    if asset_exists is None:
+                        path_key = normalize_path_key(p_path)
+                        cur_row = connection.execute(
+                            "SELECT asset_id FROM asset_paths WHERE path_key=? OR path=?",
+                            (path_key, str(p_path)),
+                        ).fetchone()
+                        if cur_row:
+                            active_asset_id = cur_row["asset_id"]
+
+                try:
+                    record = self._asset_from_db(
+                        connection,
+                        active_asset_id,
+                        preferred_path=p_path,
                     )
-                result[asset_id] = record
+                    if import_id is not None:
+                        record = record.model_copy(
+                            update={
+                                "source_order": int(source_row["source_order"]),
+                                "display_name": str(source_row["display_name"]),
+                            }
+                        )
+                    result[asset_id] = record
+                except Exception as exc:
+                    logger.debug("按 ID 读取资产记录失败 (asset_id=%s): %s", asset_id, exc)
+
             for aid, r in result.items():
                 if r.path:
                     _GLOBAL_ASSET_PATH_CACHE[aid] = str(r.path)
@@ -830,7 +930,7 @@ class CatalogRepository:
     def get_asset_path(self, asset_id: str) -> str | None:
         """快速获取资产文件绝对路径，优先命中内存缓存，极速响应预览流。"""
         cached = _GLOBAL_ASSET_PATH_CACHE.get(asset_id)
-        if cached is not None:
+        if cached is not None and Path(cached).is_file():
             return cached
         with self.connection() as connection:
             row = connection.execute(
@@ -839,6 +939,17 @@ class CatalogRepository:
             ).fetchone()
             if row and row["path"]:
                 path_str = str(row["path"])
+                if Path(path_str).is_file():
+                    _GLOBAL_ASSET_PATH_CACHE[asset_id] = path_str
+                    return path_str
+
+            # 容错降级：若 asset_paths 中无此历史 hash，尝试从 import_items 历史查找路径
+            row = connection.execute(
+                "SELECT resolved_path FROM import_items WHERE asset_id=? ORDER BY rowid DESC LIMIT 1",
+                (asset_id,),
+            ).fetchone()
+            if row and row["resolved_path"]:
+                path_str = str(row["resolved_path"])
                 if Path(path_str).is_file():
                     _GLOBAL_ASSET_PATH_CACHE[asset_id] = path_str
                     return path_str

@@ -281,4 +281,15 @@ async def test_inpaint_service_cascades_to_tasks_and_exports(tmp_path: Path):
         with Image.open(out_files[0]) as im:
             assert im.getpixel((32, 32)) == (255, 255, 0)
 
+    # 6. 验证即便用旧 asset_id 查询，Catalog 也能平滑降级找到当前物理图片与记录
+    old_queried_path = catalog.get_asset_path(asset_id)
+    assert old_queried_path is not None
+    assert Path(old_queried_path).is_file()
+    with Image.open(old_queried_path) as im:
+        assert im.getpixel((32, 32)) == (255, 255, 0)
+
+    old_queried_assets = catalog.assets_by_ids([asset_id])
+    assert asset_id in old_queried_assets
+    assert old_queried_assets[asset_id].path == str(img_path)
+
 

@@ -310,7 +310,8 @@ class InpaintService:
             new_asset = ingest_res.asset
             new_asset_id = new_asset.asset_id
 
-        # 4. 迁移历史标记（收藏、标签等）
+        # 4. 迁移历史标记并持久化别名映射（向后兼容任何旧 hash 引用）
+        catalog.record_asset_alias(asset_id, new_asset_id, str(asset_path))
         if old_marks and new_asset_id != asset_id:
             for mark in old_marks:
                 catalog.set_asset_marks([new_asset_id], mark)

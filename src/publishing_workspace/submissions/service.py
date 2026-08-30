@@ -330,6 +330,26 @@ class SubmissionService:
 
         submission = SubmissionRepository.load(task_paths)
         if submission is not None:
+            catalog_repo = self._get_catalog_repo(paths)
+            needs_update = False
+            resolved_sets = {}
+            for sel_name, ids in submission.sets.items():
+                new_ids = []
+                for aid in ids:
+                    target_aid = catalog_repo.resolve_asset_id(aid)
+                    if target_aid != aid:
+                        needs_update = True
+                    new_ids.append(target_aid)
+                resolved_sets[sel_name] = new_ids
+
+            if needs_update:
+                try:
+                    submission = submission.model_copy(update={"sets": resolved_sets})
+                    SubmissionRepository.save(task_paths, submission)
+                    logger.info("投稿任务已自愈更新别名资产引用: task_id=%s", task_id)
+                except Exception as exc:
+                    logger.warning("自愈更新 submission.yaml 别名引用失败: %s", exc)
+
             return SubmissionDetail.model_validate(
                 {
                     **submission.model_dump(mode="json"),
