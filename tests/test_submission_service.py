@@ -336,3 +336,42 @@ def test_submission_service_delete_and_unmark(tmp_path: Path):
 
     marks_final = catalog_repo.all_asset_marks()
     assert "posted" not in marks_final.get(aid_b, [])
+
+
+def test_submission_service_create_or_update_with_alias_and_cross_import(tmp_path: Path):
+    """验证保存投稿时即使传入旧别名或跨快照素材，也能自动自愈并成功保存。"""
+    root, import_id, asset_ids = _seed_workspace_with_catalog(tmp_path)
+    paths, _, _ = init_workspace(root)
+    catalog_repo = CatalogRepository(paths.catalog)
+    service = SubmissionService()
+
+    old_aid = asset_ids[0]
+    new_aid = "sha256:1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
+    
+    # 模拟 old_aid 重绘后变更为 new_aid 并写入 alias
+    catalog_repo.record_asset_alias(old_aid, new_aid, str(tmp_path / "source" / "a.png"))
+    with catalog_repo.connection() as conn:
+        conn.execute(
+            "INSERT INTO assets(asset_id, sha256, size, width, height, image_format, metadata_format, reader, warnings_json, created_at, updated_at) "
+            "VALUES (?, ?, 100, 8, 8, 'PNG', 'unknown', 'unknown', '[]', '2026-08-30', '2026-08-30')",
+            (new_aid, "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"),
+        )
+        conn.execute(
+            "INSERT INTO asset_paths(path_key, path, asset_id, size, modified_ns, available, last_seen_at) "
+            "VALUES (?, ?, ?, 100, 0, 1, '2026-08-30')",
+            ("source/a.png", str(tmp_path / "source" / "a.png"), new_aid),
+        )
+
+    # 尝试使用 old_aid 和 import_id 保存投稿，应当自动解析为 new_aid 并成功保存
+    sub = service.create_or_update(
+        root,
+        task_id=None,
+        title="自愈投稿任务",
+        source_import_id=import_id,
+        sets={"all": [old_aid, asset_ids[1]]},
+    )
+
+    assert sub.sets["all"] == [new_aid, asset_ids[1]]
+    loaded = service.get(root, sub.task_id)
+    assert loaded.sets["all"] == [new_aid, asset_ids[1]]
+

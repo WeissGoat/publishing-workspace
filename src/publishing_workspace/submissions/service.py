@@ -139,10 +139,24 @@ class SubmissionService:
             created_at = utc_now_iso()
             last_export = None
 
-        # 验证所有 asset_id 在 Catalog 中存在且文件可用
-        all_unique_ids = list(dict.fromkeys(clean_all + clean_post + clean_cover))
         catalog_repo = self._get_catalog_repo(paths)
-        asset_map = catalog_repo.assets_by_ids(all_unique_ids, import_id=clean_import_id)
+
+        # 自动将所有集合中的 ID 解析为最新权威 ID（自动修复历史别名/重绘后旧 Hash）
+        resolved_all = [catalog_repo.resolve_asset_id(x) for x in clean_all]
+        resolved_post = [catalog_repo.resolve_asset_id(x) for x in clean_post]
+        resolved_cover = [catalog_repo.resolve_asset_id(x) for x in clean_cover]
+
+        # 验证所有 asset_id 在 Catalog 中存在且文件可用
+        all_unique_ids = list(dict.fromkeys(resolved_all + resolved_post + resolved_cover))
+        asset_map: dict[str, Any] = {}
+        if clean_import_id is not None:
+            asset_map = catalog_repo.assets_by_ids(all_unique_ids, import_id=clean_import_id)
+
+        if len(asset_map) < len(all_unique_ids):
+            # 若按 import_id 无法全量命中（跨快照导入或重绘后资产），在全局 Catalog 中查找
+            global_map = catalog_repo.assets_by_ids(all_unique_ids)
+            for aid, rec in global_map.items():
+                asset_map.setdefault(aid, rec)
 
         missing_ids = [aid for aid in all_unique_ids if aid not in asset_map]
         if missing_ids:
@@ -169,9 +183,9 @@ class SubmissionService:
             revision=next_revision,
             source_import_id=clean_import_id,
             sets={
-                "all": clean_all,
-                "post": clean_post,
-                "cover": clean_cover,
+                "all": resolved_all,
+                "post": resolved_post,
+                "cover": resolved_cover,
             },
             pixiv=pixiv_meta,
             created_at=created_at,
