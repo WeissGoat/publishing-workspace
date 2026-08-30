@@ -30,8 +30,26 @@
     lastSelectedAssetId: null,
     isBatchMode: false,
     datasetAssets: [],
-    datasetImportId: null,
     cardElements: new Map(),
+    favoritesSet: (function () {
+      const set = new Set();
+      try {
+        const rawGlobal = localStorage.getItem("pw_favorites_global");
+        if (rawGlobal) {
+          JSON.parse(rawGlobal).forEach((id) => set.add(id));
+        }
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("pw_favorites_")) {
+            const raw = localStorage.getItem(k);
+            if (raw) {
+              JSON.parse(raw).forEach((id) => set.add(id));
+            }
+          }
+        }
+      } catch {}
+      return set;
+    })(),
 
     currentSubmission: {
       task_id: null,
@@ -423,122 +441,64 @@
       .replace(/"/g, "&quot;");
   }
 
-  // ================= 收藏 (Favorites) localStorage 持久化 =================
+  // ================= 收藏 (Favorites) 全局与服务端双向持久化 =================
 
-  const FAVORITES_KEY_PREFIX = "pw_favorites_";
+  const FAVORITES_GLOBAL_KEY = "pw_favorites_global";
 
-  function hasSnapshotSelection() {
-    return Array.isArray(state.filters.import_ids) && state.filters.import_ids.length > 0;
+  function getFavoritesSet() {
+    return state.favoritesSet;
   }
 
-  function getSelectedImportKey() {
-    if (!hasSnapshotSelection()) return "";
-    if (state.filters.import_ids.includes("__all__")) return "__all__";
-    return [...state.filters.import_ids].sort().join(",");
-  }
-
-  function getFavoritesSet(importKey) {
-    const key = typeof importKey === "string" ? importKey : getSelectedImportKey();
-    if (!key) return new Set();
-    if (key === "__all__") {
-      const combined = new Set();
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && k.startsWith(FAVORITES_KEY_PREFIX)) {
-            const raw = localStorage.getItem(k);
-            if (raw) {
-              const arr = JSON.parse(raw);
-              for (const id of arr) combined.add(id);
-            }
-          }
-        }
-      } catch {}
-      return combined;
-    }
-    if (key.includes(",")) {
-      const combined = new Set();
-      for (const singleId of key.split(",")) {
-        if (!singleId) continue;
-        try {
-          const raw = localStorage.getItem(FAVORITES_KEY_PREFIX + singleId);
-          if (raw) {
-            const arr = JSON.parse(raw);
-            for (const id of arr) combined.add(id);
-          }
-        } catch {}
-      }
-      return combined;
-    }
+  function saveFavoritesSet() {
     try {
-      const raw = localStorage.getItem(FAVORITES_KEY_PREFIX + key);
-      return raw ? new Set(JSON.parse(raw)) : new Set();
-    } catch {
-      return new Set();
-    }
-  }
-
-  function saveFavoritesSet(importKey, favSet) {
-    const key = typeof importKey === "string" ? importKey : getSelectedImportKey();
-    if (!key) return;
-    const storeKey = key === "__all__" ? `${FAVORITES_KEY_PREFIX}global` : FAVORITES_KEY_PREFIX + key;
-    localStorage.setItem(storeKey, JSON.stringify([...favSet]));
-  }
-
-  async function syncFavoritesFromServer(importKey) {
-    const key = typeof importKey === "string" ? importKey : getSelectedImportKey();
-    if (!key) return;
-    try {
-      let url = "/api/favorites";
-      if (key !== "__all__") {
-        if (key.includes(",")) {
-          url = `/api/favorites?import_ids=${encodeURIComponent(key)}`;
-        } else {
-          url = `/api/favorites?import_id=${encodeURIComponent(key)}`;
-        }
-      }
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.favorites) && data.favorites.length > 0) {
-          const favSet = getFavoritesSet(key);
-          let changed = false;
-          for (const id of data.favorites) {
-            if (!favSet.has(id)) {
-              favSet.add(id);
-              changed = true;
-            }
-          }
-          if (changed) {
-            saveFavoritesSet(key, favSet);
-          }
-        }
-      }
+      localStorage.setItem(FAVORITES_GLOBAL_KEY, JSON.stringify([...state.favoritesSet]));
     } catch {}
   }
 
+  async function syncFavoritesFromServer(importKey = null) {
+    try {
+      const res = await fetch("/api/favorites");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.favorites)) {
+          state.favoritesSet.clear();
+          for (const id of data.favorites) {
+            state.favoritesSet.add(id);
+          }
+          saveFavoritesSet();
+        }
+      }
+    } catch (err) {
+      console.warn("同步服务端收藏数据失败:", err);
+    }
+  }
+
   function isAssetFavorited(assetId) {
-    return getFavoritesSet().has(assetId);
+    return state.favoritesSet.has(assetId);
   }
 
   function toggleFavorite(assetId) {
-    const importKey = getSelectedImportKey();
-    if (!importKey) return false;
-    const favSet = getFavoritesSet(importKey);
-    const nowFav = !favSet.has(assetId);
+    if (!assetId) return false;
+    const nowFav = !state.favoritesSet.has(assetId);
     if (nowFav) {
-      favSet.add(assetId);
+      state.favoritesSet.add(assetId);
     } else {
-      favSet.delete(assetId);
+      state.favoritesSet.delete(assetId);
     }
-    saveFavoritesSet(importKey, favSet);
+    saveFavoritesSet();
 
     // 异步同步至 Catalog 持久化
     fetch("/api/favorites/toggle", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asset_id: assetId, import_id: state.filters.import_id || null, favorited: nowFav }),
-    }).catch(() => {});
+      body: JSON.stringify({
+        asset_id: assetId,
+        import_id: state.filters.import_id || null,
+        favorited: nowFav
+      }),
+    }).catch((err) => {
+      console.warn("异步更新收藏标记失败:", err);
+    });
 
     return nowFav;
   }
@@ -1764,23 +1724,25 @@
 
       if (action === "favorite") {
         assetIds.forEach((aid) => {
-          state.favorites.add(aid);
+          state.favoritesSet.add(aid);
           const card = state.cardElements.get(aid);
           if (card) {
             const btn = card.querySelector(".asset-star-btn");
             if (btn) btn.classList.add("starred");
           }
         });
+        saveFavoritesSet();
         showNotice(`⭐ 已批量收藏 ${assetIds.length} 张图片`, "success");
       } else if (action === "unfavorite") {
         assetIds.forEach((aid) => {
-          state.favorites.delete(aid);
+          state.favoritesSet.delete(aid);
           const card = state.cardElements.get(aid);
           if (card) {
             const btn = card.querySelector(".asset-star-btn");
             if (btn) btn.classList.remove("starred");
           }
         });
+        saveFavoritesSet();
         showNotice(`☆ 已批量取消收藏 ${assetIds.length} 张图片`, "info");
       } else if (action === "mark_posted") {
         assetIds.forEach((aid) => {
@@ -6852,6 +6814,7 @@
   // 初始化加载 (优先自动恢复上次选中的快照，并按需加载历史投稿与URL参数)
   (async function initApp() {
     await Promise.all([
+      syncFavoritesFromServer(),
       loadImportsList(),
       loadTagsList(),
       loadHistoricalSubmissions(),
