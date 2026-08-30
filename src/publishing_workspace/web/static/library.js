@@ -1926,6 +1926,7 @@
   }
 
   async function openLightbox(assetId, customAssetList = null, options = {}) {
+    if (!assetId) return;
     const pushHistory = options.pushHistory === true;
     if (pushHistory && state.lightbox.activeAssetId && state.lightbox.activeAssetId !== assetId) {
       const currentItem = state.loadedAssets.get(state.lightbox.activeAssetId);
@@ -1946,9 +1947,9 @@
       state.lightbox.assetList = getVisibleAssetIds();
     }
     state.lightbox.currentIndex = state.lightbox.assetList.indexOf(assetId);
-    if (state.lightbox.currentIndex === -1 && state.lightbox.assetList.length > 0) {
+    if (state.lightbox.currentIndex === -1) {
+      state.lightbox.assetList = [assetId];
       state.lightbox.currentIndex = 0;
-      assetId = state.lightbox.assetList[0];
     }
     state.lightbox.activeAssetId = assetId;
 
@@ -2414,7 +2415,8 @@
         e.stopPropagation();
         const targetId = el.dataset.assetId || el.closest("[data-asset-id]")?.dataset.assetId;
         if (targetId) {
-          openLightbox(targetId, null, { pushHistory: true });
+          const relAssetIds = items.map((it) => it.asset_id).filter(Boolean);
+          openLightbox(targetId, relAssetIds.length ? relAssetIds : [targetId], { pushHistory: true });
         }
       });
     });
