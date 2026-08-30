@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260824-39">
+  <link rel="stylesheet" href="/library.css?v=20260830-01">
 </head>
 <body>
   <main class="app-shell">
@@ -35,10 +35,35 @@
           <button id="reset-filters" class="text-button" type="button">重置筛选</button>
         </div>
 
-        <label class="field-label" for="import-select">导入快照</label>
-        <select id="import-select" class="field-control">
-          <option value="">-- 请选择导入快照 --</option>
-        </select>
+        <div class="field-label-row">
+          <label class="field-label" for="snapshot-picker-trigger">导入快照</label>
+          <span id="snapshot-count-hint" class="snapshot-count-hint"></span>
+        </div>
+        <div class="snapshot-picker" id="snapshot-picker">
+          <div class="snapshot-picker-trigger" id="snapshot-picker-trigger" tabindex="0" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+            <div class="snapshot-picker-value" id="snapshot-picker-value">
+              <span class="snapshot-picker-placeholder">-- 请选择导入快照 --</span>
+            </div>
+            <div class="snapshot-picker-actions">
+              <button type="button" class="snapshot-picker-clear hidden" id="snapshot-picker-clear" title="清空快照选择">✕</button>
+              <span class="snapshot-picker-arrow">▾</span>
+            </div>
+          </div>
+          <div class="snapshot-picker-dropdown hidden" id="snapshot-picker-dropdown">
+            <div class="snapshot-picker-search-wrap">
+              <input type="text" class="snapshot-picker-search" id="snapshot-picker-search" placeholder="🔍 搜索快照名称 / 标签..." autocomplete="off">
+            </div>
+            <div class="snapshot-picker-quick-bar">
+              <button type="button" class="quick-btn" id="snapshot-select-all">全选</button>
+              <button type="button" class="quick-btn" id="snapshot-select-none">清空</button>
+              <button type="button" class="quick-btn highlight" id="snapshot-select-global">🌟 全量素材浏览</button>
+            </div>
+            <div class="snapshot-picker-list" id="snapshot-picker-list" role="listbox">
+              <!-- 动态渲染各快照项 -->
+            </div>
+          </div>
+        </div>
+        <select id="import-select" class="hidden" style="display:none;"></select>
 
         <!-- 快照加载进度条 -->
         <div id="import-progress-wrap" class="import-progress-wrap hidden">
@@ -74,6 +99,15 @@
               <button class="segment-btn" type="button" data-val="unposted">未投稿</button>
             </div>
           </div>
+        </div>
+
+        <!-- 标签筛选模块 -->
+        <div id="tag-filter-section" class="tag-filter-section" hidden>
+          <div class="tag-filter-header">
+            <span class="tag-filter-title">🏷️ 筛选标签</span>
+            <button id="clear-tag-filters" class="text-button" type="button" hidden>清除</button>
+          </div>
+          <div id="tag-chips-container" class="tag-chips-container"></div>
         </div>
 
         <!-- 当前已生效的筛选标签 -->
@@ -143,6 +177,24 @@
             <h2>素材检索结果 <span id="asset-count-badge" class="asset-count-badge"></span></h2>
           </div>
           <div class="assets-actions">
+            <!-- 瀑布流卡片尺寸调节滑块 -->
+            <div class="card-size-wrap" title="拖动调节卡片尺寸，双击恢复默认 (170px)">
+              <span class="card-size-icon" title="缩略图大小">🖼️</span>
+              <input type="range" id="card-size-slider" class="card-size-slider" min="110" max="360" step="10" value="170" aria-label="调整图片卡片大小">
+              <span id="card-size-val" class="card-size-val">170px</span>
+            </div>
+
+            <div class="sort-wrap">
+              <label for="sort-select" class="sort-label">排序</label>
+              <select id="sort-select" class="sort-select" title="更改素材展示排序">
+                <option value="order_asc">🔀 原始正序 (1 → N)</option>
+                <option value="order_desc">🔄 逆序排列 (最新在前)</option>
+                <option value="time_desc">🕒 修改时间 (最新优先)</option>
+                <option value="time_asc">🕒 修改时间 (最早优先)</option>
+                <option value="name_asc">🔤 文件名 (A → Z)</option>
+                <option value="name_desc">🔤 文件名 (Z → A)</option>
+              </select>
+            </div>
             <span id="selected-count-badge" class="muted">已选 0 项</span>
             <button id="select-all-visible-btn" class="secondary-button compact-button" type="button">全选当前</button>
             <button id="clear-selection-btn" class="text-button" type="button">清选</button>
@@ -229,6 +281,34 @@
               <button id="pixiv-auto-btn" class="text-button compact-btn" type="button" title="根据当前选择的素材重新生成标题与推荐标签">✨ 重新生成</button>
             </div>
 
+            <!-- 🖼️ Pixiv 封面与 1:1 缩略图裁剪预览 -->
+            <div class="pixiv-thumb-section">
+              <div class="pixiv-thumb-header">
+                <span class="field-label" style="margin-bottom:0;">🖼️ 封面缩略图 (1:1 正方形)</span>
+                <button id="pixiv-crop-reset-btn" class="text-button" type="button" style="font-size:11px;" title="重置为 Pixiv 官方默认裁剪比例">↺ 恢复默认</button>
+              </div>
+              <div class="pixiv-thumb-card">
+                <div class="pixiv-thumb-preview-wrap">
+                  <div id="pixiv-thumb-preview-box" class="pixiv-thumb-preview-box">
+                    <img id="pixiv-thumb-preview-img" alt="缩略图预览" class="pixiv-thumb-preview-img">
+                  </div>
+                  <div id="pixiv-thumb-empty-box" class="pixiv-thumb-empty-box hidden">
+                    <span>无封面图</span>
+                  </div>
+                </div>
+                <div class="pixiv-thumb-info">
+                  <div class="pixiv-thumb-meta-line">
+                    <span id="pixiv-thumb-orientation-badge" class="pixiv-thumb-badge">竖图</span>
+                    <span id="pixiv-thumb-dimensions" class="pixiv-thumb-dim">- × -</span>
+                  </div>
+                  <div id="pixiv-thumb-crop-status" class="pixiv-thumb-crop-status">默认居中裁剪</div>
+                  <button id="open-pixiv-crop-btn" class="secondary-button compact-button pixiv-crop-trigger-btn" type="button">
+                    <span>✂️ 调整缩略图范围</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- Pixiv 描述 -->
             <label class="field-label" for="pixiv-caption" style="margin-top:6px;">Pixiv 描述 (Caption)</label>
             <textarea id="pixiv-caption" class="field-control pixiv-caption-input" rows="2" placeholder="Hi there!..."></textarea>
@@ -290,7 +370,17 @@
                 <div class="pixiv-publish-btn-row">
                   <button id="publish-to-pixiv-btn" class="primary-button pixiv-publish-btn" type="button">🚀 发布到 Pixiv</button>
                   <button id="republish-to-pixiv-btn" class="secondary-button compact-button hidden" type="button" title="忽略已发布记录重新上传">🔄 重新发布</button>
+                  <button id="schedule-pixiv-btn" class="secondary-button compact-button pixiv-schedule-btn" type="button" title="开启/取消定时自动发布">⏰ 开启定时发布</button>
                 </div>
+                <div class="pixiv-schedule-options-row">
+                  <label class="schedule-delay-toggle-label" title="默认准时投稿（过期不补发）。勾选后若服务重启/维护时在容差时间内依然会自动补发">
+                    <input type="checkbox" id="schedule-allow-delay-checkbox">
+                    <span>允许延迟补发 (容差</span>
+                  </label>
+                  <input type="number" id="schedule-delay-minutes-input" class="field-control compact-delay-input" value="240" min="1" max="1440" style="width:58px;height:24px;padding:2px 4px;text-align:center;font-size:12px;">
+                  <span style="font-size:11px;color:#64748b;">分钟)</span>
+                </div>
+                <div id="pixiv-schedule-status-box" class="pixiv-schedule-status-box hidden"></div>
               </div>
             </div>
           </div>
@@ -330,10 +420,19 @@
           </div>
 
           <div class="export-options-bar">
-            <label class="mosaic-checkbox-label" title="自动检测敏感部位（欧派、私处等）并执行像素打码">
-              <input type="checkbox" id="export-mosaic-toggle" checked>
-              <span>🛡️ 启用 AI 自动打码 (YOLO+Pixel)</span>
-            </label>
+            <div class="export-options-header">
+              <label class="mosaic-checkbox-label" title="自动检测敏感部位并执行像素打码">
+                <input type="checkbox" id="export-mosaic-toggle" checked>
+                <span>🛡️ 启用 AI 自动打码 (YOLO+Pixel)</span>
+              </label>
+            </div>
+            <div id="export-mosaic-params" class="export-mosaic-params">
+              <div class="mosaic-param-row">
+                <span class="mosaic-param-label" title="像素马赛克方块大小 (针对 832x1216 / 1024x1024 推荐 10px)">▦ 马赛克强度:</span>
+                <input type="range" id="export-mosaic-pixel-size" class="mosaic-param-slider" min="4" max="32" step="1" value="10">
+                <span id="export-mosaic-pixel-val" class="mosaic-param-val">10px</span>
+              </div>
+            </div>
           </div>
 
           <div id="export-progress-box" class="export-progress-box hidden">
@@ -401,7 +500,8 @@
         <!-- 🌟 Lightbox 视图与图片编辑页签切换 -->
         <div id="lightbox-mode-tabs" class="segmented-control lightbox-mode-tabs">
           <button type="button" class="segment-btn active" data-lb-tab="view">🔍 查看详情</button>
-          <button type="button" class="segment-btn" data-lb-tab="edit">🎨 图片编辑 (手动打码)</button>
+          <button type="button" class="segment-btn" data-lb-tab="inpaint">🖌️ 局部重绘 (Inpaint)</button>
+          <button type="button" class="segment-btn hidden" data-lb-tab="edit">🎨 手动打码</button>
         </div>
         <div class="lightbox-header-actions">
           <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
@@ -437,8 +537,114 @@
           </div>
         </div>
 
+        <!-- ✨ AI 局部重绘 (Inpaint) 工作台 -->
+        <div id="lightbox-inpaint-area" class="lightbox-inpaint-area hidden">
+          <div class="inpaint-toolbar">
+            <label class="inpaint-control">🖌️ 画笔粗细 <input type="range" id="inpaint-brush-size" min="10" max="120" value="36"> <span id="inpaint-brush-size-val">36</span></label>
+            <span class="inpaint-sep"></span>
+            <button type="button" id="inpaint-undo-btn" class="inpaint-btn" disabled title="撤销 (Ctrl+Z)">↶ 撤销</button>
+            <button type="button" id="inpaint-redo-btn" class="inpaint-btn" disabled title="重做 (Ctrl+Y)">↷ 重做</button>
+            <button type="button" id="inpaint-clear-btn" class="inpaint-btn" title="清空所有涂抹遮罩">🗑️ 清空遮罩</button>
+            <span class="inpaint-sep"></span>
+            <button type="button" id="inpaint-toggle-diff-btn" class="inpaint-btn inpaint-btn-highlight hidden" title="按住可临时查看原图">👁️ 按住看原图</button>
+          </div>
+          <!-- 遮罩绘制画布视口 -->
+          <div id="inpaint-canvas-wrap" class="inpaint-canvas-wrap">
+            <canvas id="inpaint-canvas-bg"></canvas>
+            <canvas id="inpaint-canvas-mask"></canvas>
+            <canvas id="inpaint-canvas-cursor"></canvas>
+          </div>
+          <!-- 结果对比滑动视口 (生成后展示) -->
+          <div id="inpaint-compare-wrap" class="inpaint-compare-wrap hidden">
+            <div id="inpaint-compare-inner" class="inpaint-compare-inner">
+              <img id="inpaint-compare-before" class="inpaint-compare-img before" alt="原图">
+              <div id="inpaint-compare-after-wrap" class="inpaint-compare-after-wrap">
+                <img id="inpaint-compare-after" class="inpaint-compare-img after" alt="重绘图">
+              </div>
+              <div id="inpaint-compare-handle" class="inpaint-compare-handle">
+                <div class="handle-line"></div>
+                <div class="handle-pill">◄►</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 右侧元数据与定制详情侧栏 -->
         <aside class="lightbox-sidebar">
+          <!-- Inpaint 专用精简控制侧栏 -->
+          <div id="lightbox-inpaint-sidebar" class="lightbox-inpaint-sidebar hidden">
+            <div class="inpaint-panel-card">
+              <h4 class="inpaint-panel-title">✨ AI 局部重绘设置</h4>
+              <p class="helper-text inpaint-hint">在左侧画布上涂抹要重绘的区域，其他区域与生成参数（模型、步数、CFG、采样器等）将 100% 保持与原图一致。</p>
+              
+              <div class="inpaint-field-group">
+                <label class="inpaint-field-label" for="inpaint-prompt-input">📝 正向提示词 (Prompt)</label>
+                <textarea id="inpaint-prompt-input" class="inpaint-textarea" rows="4" placeholder="自动继承原图提示词，可在此追加或修改..."></textarea>
+              </div>
+
+              <div class="inpaint-field-group">
+                <label class="inpaint-field-label" for="inpaint-neg-prompt-input">🚫 负向提示词 (Negative)</label>
+                <textarea id="inpaint-neg-prompt-input" class="inpaint-textarea" rows="3" placeholder="自动继承原图负向提示词..."></textarea>
+              </div>
+
+              <div class="inpaint-field-group">
+                <div class="inpaint-slider-row">
+                  <label class="inpaint-field-label" for="inpaint-strength-slider">🎚️ 重绘去噪强度 (Strength)</label>
+                  <span id="inpaint-strength-val" class="inpaint-val-badge">0.70</span>
+                </div>
+                <input type="range" id="inpaint-strength-slider" min="0.10" max="1.00" step="0.05" value="0.70" class="inpaint-slider">
+                <div class="slider-ticks"><span>微调 0.1</span><span>适中 0.7</span><span>大幅 1.0</span></div>
+              </div>
+
+              <div class="inpaint-field-group">
+                <label class="inpaint-field-label">🔢 生成张数</label>
+                <div id="inpaint-count-group" class="inpaint-count-group">
+                  <button type="button" class="inpaint-count-btn" data-count="1">1 张</button>
+                  <button type="button" class="inpaint-count-btn active" data-count="2">2 张 (推荐)</button>
+                  <button type="button" class="inpaint-count-btn" data-count="4">4 张</button>
+                </div>
+              </div>
+
+              <button type="button" id="inpaint-generate-btn" class="inpaint-action-btn inpaint-generate-btn">
+                <span class="btn-spinner hidden" id="inpaint-spinner"></span>
+                <span id="inpaint-generate-btn-text">🚀 开始局部重绘</span>
+              </button>
+
+              <!-- 局部重绘生成进度与状态提示 -->
+              <div id="inpaint-progress-box" class="inpaint-progress-box hidden">
+                <div class="inpaint-progress-header">
+                  <span class="inpaint-progress-spinner"></span>
+                  <span id="inpaint-progress-text" class="inpaint-progress-text">正在重绘第 1 / 2 张...</span>
+                </div>
+                <div class="inpaint-progress-track">
+                  <div id="inpaint-progress-fill" class="inpaint-progress-fill"></div>
+                </div>
+                <div id="inpaint-progress-hint" class="inpaint-progress-hint">单张按序生成中，若遇 429 限流将自动智能重试</div>
+              </div>
+            </div>
+
+            <!-- 候选图片结果列表与覆盖操作区 -->
+            <div id="inpaint-results-section" class="inpaint-results-section hidden">
+              <div class="inpaint-section-header">
+                <h4 class="inpaint-panel-title">🖼️ 候选重绘结果 (<span id="inpaint-candidates-count">0</span>)</h4>
+                <span class="helper-text">点击候选卡片进行对比</span>
+              </div>
+              
+              <div id="inpaint-candidates-grid" class="inpaint-candidates-grid"></div>
+
+              <div class="inpaint-apply-actions">
+                <button type="button" id="inpaint-apply-btn" class="inpaint-action-btn inpaint-apply-btn">
+                  ✅ 确认采用并覆盖原图
+                </button>
+                <button type="button" id="inpaint-discard-btn" class="inpaint-action-btn inpaint-discard-btn">
+                  ❌ 放弃本次重绘
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 查看详情侧栏主体 -->
+          <div id="lightbox-view-sidebar" class="lightbox-view-sidebar">
           <!-- 快捷操作栏（收藏、投稿状态、打开目录） -->
           <div class="lightbox-action-card">
             <button id="lightbox-favorite-btn" class="lightbox-btn" type="button">
@@ -484,6 +690,21 @@
               </div>
             </div>
 
+            <!-- 📂 关联快照 (A-2 方案：详情侧栏折叠卡片) -->
+            <div id="lb-snapshots-section" class="lightbox-meta-section lb-snapshots-section">
+              <div class="section-title-row">
+                <h4 class="lightbox-section-title">📂 关联快照 <span id="lb-snapshots-count" class="meta-count-badge">(0)</span></h4>
+                <span class="lightbox-section-hint">点击直达快照并定位</span>
+              </div>
+              <div id="lb-snapshots-list" class="lb-snapshots-list"></div>
+            </div>
+
+            <!-- 🏷️ 导入与筛选标签 -->
+            <div id="lb-tags-section" class="lightbox-meta-section" hidden>
+              <h4 class="lightbox-section-title">🏷️ 筛选标签</h4>
+              <div id="lb-tags-list" class="lb-tags-list"></div>
+            </div>
+
             <!-- Classify 属性标签 -->
             <div id="lb-facets-section" class="lightbox-meta-section">
               <h4 class="lightbox-section-title">✨ Classify 属性标签</h4>
@@ -519,6 +740,79 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260825-41" defer></script>
+  <!-- ✂️ Pixiv 缩略图范围裁剪调整 Modal -->
+  <dialog id="pixiv-crop-dialog" class="pixiv-crop-dialog">
+    <div class="crop-modal-container">
+      <header class="crop-modal-header">
+        <div class="crop-modal-title-group">
+          <h3>✂️ 调整 Pixiv 缩略图显示位置</h3>
+          <p id="crop-modal-subtitle" class="crop-modal-subtitle">拖拽或滑动调整 1:1 正方形显示区域，完美对齐 Pixiv 官网规范</p>
+        </div>
+        <button id="close-crop-dialog-btn" class="lightbox-close-btn" type="button" title="关闭 (Esc)">&#10005;</button>
+      </header>
+
+      <div class="crop-modal-body">
+        <!-- 裁剪工作视口 -->
+        <div class="crop-stage-wrapper">
+          <div id="crop-stage" class="crop-stage">
+            <img id="crop-stage-img" alt="裁剪原图" class="crop-stage-img">
+            <div id="crop-viewport-frame" class="crop-viewport-frame"></div>
+            <div class="crop-drag-hint">
+              <span id="crop-drag-hint-text">🖐️ 鼠标按住左右拖拽平移</span>
+            </div>
+          </div>
+
+          <!-- 精细控制滑块 -->
+          <div class="crop-slider-bar">
+            <span id="crop-slider-start-label" class="crop-slider-label">顶端</span>
+            <input type="range" id="crop-range-slider" class="crop-range-slider" min="0" max="1000" step="1" value="0">
+            <span id="crop-slider-end-label" class="crop-slider-label">底端</span>
+          </div>
+        </div>
+
+        <!-- 右侧效果实时预览与快捷操作 -->
+        <aside class="crop-sidebar">
+          <div class="crop-preview-group">
+            <h4 class="crop-section-title">📱 实时展示效果</h4>
+            <div class="crop-previews-row">
+              <div class="crop-preview-item">
+                <div class="crop-preview-frame frame-lg">
+                  <img id="crop-live-preview-lg" alt="大尺寸预览">
+                </div>
+                <span class="crop-preview-label">作品列表 (120px)</span>
+              </div>
+              <div class="crop-preview-item">
+                <div class="crop-preview-frame frame-sm">
+                  <img id="crop-live-preview-sm" alt="小尺寸预览">
+                </div>
+                <span class="crop-preview-label">搜索/推荐 (80px)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="crop-quick-actions">
+            <h4 class="crop-section-title">⚡ 快速对齐</h4>
+            <div class="crop-presets-btn-row">
+              <button type="button" id="crop-preset-start-btn" class="secondary-button compact-button">⬆️ 置顶</button>
+              <button type="button" id="crop-preset-center-btn" class="secondary-button compact-button">🎯 居中</button>
+              <button type="button" id="crop-preset-end-btn" class="secondary-button compact-button">⬇️ 置底</button>
+            </div>
+          </div>
+
+          <div class="crop-coords-display">
+            <span class="coords-label">当前比例：</span>
+            <code id="crop-coords-text">crop[x]=0.0000, crop[y]=0.0000</code>
+          </div>
+
+          <div class="crop-dialog-footer-actions">
+            <button type="button" id="crop-apply-btn" class="primary-button crop-apply-btn">✓ 应用保存</button>
+            <button type="button" id="crop-cancel-btn" class="secondary-button">取消</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/library.js?v=20260830-01" defer></script>
 </body>
 </html>

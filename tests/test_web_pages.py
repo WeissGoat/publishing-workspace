@@ -28,6 +28,9 @@ def test_library_page_contains_filters_and_submission_editor(tmp_path: Path):
     assert "素材库" in response.text
     assert "Submission Editor" in response.text
     assert "classify.yaml" in response.text
+    assert "pixiv-thumb-section" in response.text
+    assert "pixiv-crop-dialog" in response.text
+
 
 
 def test_root_serves_calendar_page(tmp_path: Path):
@@ -48,3 +51,20 @@ def test_legacy_schedule_page_accessible(tmp_path: Path):
 
     assert response.status_code == 200
     assert "Publishing Workspace" in response.text
+
+
+def test_static_javascript_files_syntax():
+    import shutil
+    import subprocess
+
+    node_bin = shutil.which("node")
+    if not node_bin:
+        return
+
+    static_dir = Path(__file__).parent.parent / "src" / "publishing_workspace" / "web" / "static"
+    js_files = list(static_dir.glob("*.js"))
+    assert len(js_files) > 0
+
+    for js_file in js_files:
+        res = subprocess.run([node_bin, "--check", str(js_file)], capture_output=True, text=True)
+        assert res.returncode == 0, f"JS Syntax Error in {js_file.name}:\n{res.stderr}"
