@@ -233,3 +233,52 @@ def test_node_search_lists_fuzzy_candidates_with_paging(tmp_path: Path):
 
     assert [item.name for item in result.nodes] == ["akemi_homura"]
     assert result.has_more is False
+
+
+def test_search_with_multiple_import_ids(tmp_path: Path):
+    paths, _, assets = seed_catalog(tmp_path)
+    # 额外创建一个 import-2
+    third = png(paths.root / "images" / "third.png", "green")
+    selection2 = SelectionSet(
+        id="import-2",
+        source_type="directory",
+        source_ref=str(third.parent),
+        items=[
+            ImportedItem(
+                source_path=str(third),
+                resolved_path=str(third),
+                source_type="file",
+                source_ref=str(third),
+                source_order=0,
+                display_name=third.name,
+            )
+        ],
+    )
+    action_root = paths.root / "design" / "动作改2" / "st_foot" / "foot_detail"
+    registry2 = ImageNodeReaderRegistry([StaticNodeReader(action_root, "mami_tomoe")])
+    CatalogRepository(paths.catalog).import_selection(
+        selection2,
+        readers=registry2,
+        enrichers=[],
+    )
+
+    # 1. 过滤单个 import-1
+    res_single = AssetSearchService().search(tmp_path, AssetSearchFilter(import_ids=["import-1"]))
+    assert len(res_single) == 2
+
+    # 2. 联合多选 import-1 和 import-2
+    res_multi = AssetSearchService().search(tmp_path, AssetSearchFilter(import_ids=["import-1", "import-2"]))
+    assert len(res_multi) == 3
+
+    # 3. 过滤单个 import-2
+    res_imp2 = AssetSearchService().search(tmp_path, AssetSearchFilter(import_ids=["import-2"]))
+    assert len(res_imp2) == 1
+    assert res_imp2[0].display_name == "third.png"
+
+
+def test_facets_with_multiple_import_ids(tmp_path: Path):
+    paths, _, assets = seed_catalog(tmp_path)
+    facets_multi = AssetSearchService().facets(tmp_path, import_ids=["import-1"])
+    assert facets_multi["clothing"] == ["nude"]
+
+

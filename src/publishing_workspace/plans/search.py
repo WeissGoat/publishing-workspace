@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -41,17 +42,50 @@ NODE_FIELDS = ("artist", "character", "action_group", "action", "background")
 
 class AssetSearchFilter(BaseModel):
     import_id: str | None = None
+    import_ids: list[str] | None = None
     text: str = ""
     artist: str | None = None
     character: str | None = None
     action_group: str | None = None
     action: str | None = None
     facets: dict[str, set[str]] = Field(default_factory=dict)
+    tags: set[str] = Field(default_factory=set)
     posted: bool | None = None
     favorite_mode: Literal["all", "favorited", "unfavorited"] = "all"
     favorite_ids: set[str] = Field(default_factory=set)
+    sort_by: Literal["order_asc", "order_desc", "time_desc", "time_asc", "name_asc", "name_desc"] = "order_asc"
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=1000)
+
+    @field_validator("import_ids", mode="before")
+    @classmethod
+    def normalize_import_ids(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            clean = [x.strip() for x in value.split(",") if x.strip() and x.strip() != "__all__"]
+            return clean or None
+        if isinstance(value, (list, set, tuple)):
+            clean = [str(x).strip() for x in value if str(x).strip() and str(x).strip() != "__all__"]
+            return clean or None
+        return None
+
+    @field_validator("sort_by", mode="before")
+    @classmethod
+    def normalize_sort_by(cls, value: Any) -> str:
+        valid_sorts = {"order_asc", "order_desc", "time_desc", "time_asc", "name_asc", "name_desc"}
+        if isinstance(value, str) and value.strip() in valid_sorts:
+            return value.strip()
+        return "order_asc"
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: Any) -> set[str]:
+        if isinstance(value, str):
+            return {x.strip() for x in value.split(",") if x.strip()}
+        if isinstance(value, (list, set, tuple)):
+            return {str(x).strip() for x in value if str(x).strip()}
+        return set()
 
     @field_validator("import_id", "text", "artist", "character", "action_group", "action")
     @classmethod
@@ -81,6 +115,7 @@ class AssetSearchResult(BaseModel):
     image_format: str
     values: dict[str, list[str]]
     facets: dict[str, list[str]]
+    tags: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     usage: list[str] = Field(default_factory=list)
 
@@ -223,17 +258,21 @@ class AssetSearchService:
         self,
         root: str | Path,
         filters: AssetSearchFilter,
+        *,
+        catalog: CatalogRepository | None = None,
     ) -> list[AssetSearchResult]:
         """保留旧数组接口，始终从匹配结果的第一条开始返回。"""
-        return self._search_matches(root, filters)[: filters.limit]
+        return self._search_matches(root, filters, catalog=catalog)[: filters.limit]
 
     def search_page(
         self,
         root: str | Path,
         filters: AssetSearchFilter,
+        *,
+        catalog: CatalogRepository | None = None,
     ) -> AssetPageResult:
         """先完成全部过滤和稳定排序，再执行 offset/limit 分页。"""
-        matches = self._search_matches(root, filters)
+        matches = self._search_matches(root, filters, catalog=catalog)
         start = filters.offset
         end = start + filters.limit
         items = matches[start:end]
@@ -247,17 +286,23 @@ class AssetSearchService:
             next_offset=next_offset,
         )
 
-    def preload(self, root: str | Path) -> None:
-        """在后端服务启动时预热全局素材检索索引、快照索引、使用索引与节点候选。"""
+    def preload(
+        self,
+        root: str | Path,
+        *,
+        catalog: CatalogRepository | None = None,
+    ) -> None:
+        """在后端服务启动时预热全局素材检索索引、最新快照索引、使用索引与节点候选。"""
         paths, config = load_workspace(root)
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
         # 1. 预热使用索引（秒级构建并缓存）
         self._usage_index(paths, config.image_extensions)
-        # 2. 预热各个快照索引
-        for import_id, _ in catalog.import_sources():
-            self._get_search_entries(paths, config, import_id)
-        # 3. 预热全量快照索引
-        self._get_search_entries(paths, config, None)
+        # 2. 预热最新的 2 个活跃快照索引，其余快照在全量聚合时按需懒构建
+        for import_id, _ in catalog_inst.import_sources()[:2]:
+            self._get_search_entries(paths, config, import_id, catalog=catalog_inst)
+        # 3. 预热全量聚合缓存（复用上面已缓存的快照 + 懒构建剩余快照），
+        #    确保用户首次点击"全部导入快照"时无需等待
+        self._get_search_entries(paths, config, None, catalog=catalog_inst)
         # 4. 预热节点候选
         for role in NODE_FIELDS:
             NodeSearchService().search(root, role=role, limit=1)
@@ -266,21 +311,68 @@ class AssetSearchService:
         self,
         paths,
         config,
-        import_id: str | None,
+        import_ids: Collection[str] | str | None,
+        *,
+        catalog: CatalogRepository | None = None,
     ) -> list[_PrecomputedSearchEntry]:
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
         try:
-            stat = catalog.path.stat()
+            stat = catalog_inst.path.stat()
             mtime_ns = stat.st_mtime_ns
         except OSError:
             mtime_ns = 0
 
-        cache_key = (str(catalog.path.resolve()), mtime_ns, import_id)
+        # 规范化缓存 Key：None | str | tuple[str, ...]
+        norm_key: str | tuple[str, ...] | None
+        if import_ids is None:
+            norm_key = None
+        elif isinstance(import_ids, str):
+            clean_str = import_ids.strip()
+            norm_key = clean_str if clean_str and clean_str != "__all__" else None
+        else:
+            clean_list = sorted({str(x).strip() for x in import_ids if str(x).strip() and str(x).strip() != "__all__"})
+            if not clean_list:
+                norm_key = None
+            elif len(clean_list) == 1:
+                norm_key = clean_list[0]
+            else:
+                norm_key = tuple(clean_list)
+
+        cache_key = (str(catalog_inst.path.resolve()), mtime_ns, norm_key)
         cached = _SEARCH_ENTRIES_CACHE.get(cache_key)
         if cached is not None:
             return cached
 
-        assets = catalog.assets_for_import(import_id)
+        if norm_key is None:
+            # 聚合所有单独快照的预计算条目（复用各个已缓存快照，无需从零全量扫描）
+            aggregated: list[_PrecomputedSearchEntry] = []
+            seen_ids: set[str] = set()
+            import_sources = catalog_inst.import_sources()
+            if import_sources:
+                for imp_id, _ in import_sources:
+                    sub_entries = self._get_search_entries(paths, config, imp_id, catalog=catalog_inst)
+                    for entry in sub_entries:
+                        if entry.asset.asset_id not in seen_ids:
+                            seen_ids.add(entry.asset.asset_id)
+                            aggregated.append(entry)
+                _SEARCH_ENTRIES_CACHE[cache_key] = aggregated
+                return aggregated
+        elif isinstance(norm_key, tuple):
+            # 聚合指定多个快照条目（复用单快照缓存）
+            aggregated_multi: list[_PrecomputedSearchEntry] = []
+            seen_multi_ids: set[str] = set()
+            for imp_id in norm_key:
+                sub_entries = self._get_search_entries(paths, config, imp_id, catalog=catalog_inst)
+                for entry in sub_entries:
+                    if entry.asset.asset_id not in seen_multi_ids:
+                        seen_multi_ids.add(entry.asset.asset_id)
+                        aggregated_multi.append(entry)
+            _SEARCH_ENTRIES_CACHE[cache_key] = aggregated_multi
+            return aggregated_multi
+
+        # 单个快照
+        single_import_id = norm_key
+        assets = catalog_inst.assets_for_import(single_import_id)
         action_config = config.classification.action_resolution
         action_resolver = ActionNodeValueResolver(
             design_root=action_config.design_root,
@@ -289,11 +381,11 @@ class AssetSearchService:
         )
 
         entries: list[_PrecomputedSearchEntry] = []
-        for asset in assets:
+        for index, asset in enumerate(assets):
             values = self._node_values(asset, action_resolver)
             facets, facet_warnings = self.facet_reader.read(asset)
             sort_key = (
-                asset.source_order,
+                index,
                 asset.display_name.casefold(),
                 asset.asset_id,
             )
@@ -316,6 +408,9 @@ class AssetSearchService:
         for k in list(_SEARCH_ENTRIES_CACHE):
             if k[0] == cache_key[0] and k[1] != cache_key[1]:
                 del _SEARCH_ENTRIES_CACHE[k]
+                # Catalog 修改后动作解析缓存也需失效，避免返回过期映射
+                from ..action_resolution import _GLOBAL_ASSET_ACTION_CACHE
+                _GLOBAL_ASSET_ACTION_CACHE.clear()
 
         _SEARCH_ENTRIES_CACHE[cache_key] = entries
         return entries
@@ -324,9 +419,12 @@ class AssetSearchService:
         self,
         root: str | Path,
         filters: AssetSearchFilter,
+        *,
+        catalog: CatalogRepository | None = None,
     ) -> list[AssetSearchResult]:
         paths, config = load_workspace(root)
-        entries = self._get_search_entries(paths, config, filters.import_id)
+        target_imports = filters.import_ids or (filters.import_id if filters.import_id and filters.import_id != "__all__" else None)
+        entries = self._get_search_entries(paths, config, target_imports, catalog=catalog)
 
         text_filter = filters.text.casefold() if filters.text else ""
         artist_filter = filters.artist.casefold() if filters.artist else ""
@@ -370,6 +468,15 @@ class AssetSearchService:
 
             matched_entries.append(entry)
 
+        catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        all_marks = catalog_inst.all_asset_marks()
+
+        if filters.tags:
+            matched_entries = [
+                e for e in matched_entries
+                if bool(filters.tags.intersection({m[4:] for m in all_marks.get(e.asset.asset_id, []) if m.startswith("tag:")}))
+            ]
+
         if filters.favorite_mode == "favorited":
             if not filters.favorite_ids:
                 return []
@@ -378,6 +485,27 @@ class AssetSearchService:
         elif filters.favorite_mode == "unfavorited":
             fav_ids = filters.favorite_ids or set()
             matched_entries = [e for e in matched_entries if e.asset.asset_id not in fav_ids]
+
+        if filters.sort_by == "order_desc":
+            matched_entries.reverse()
+        elif filters.sort_by == "time_desc":
+            matched_entries.sort(
+                key=lambda e: (e.asset.fingerprint.modified_ns, e.asset.asset_id),
+                reverse=True,
+            )
+        elif filters.sort_by == "time_asc":
+            matched_entries.sort(
+                key=lambda e: (e.asset.fingerprint.modified_ns, e.asset.asset_id),
+            )
+        elif filters.sort_by == "name_asc":
+            matched_entries.sort(
+                key=lambda e: (e.asset.display_name.casefold(), e.asset.asset_id),
+            )
+        elif filters.sort_by == "name_desc":
+            matched_entries.sort(
+                key=lambda e: (e.asset.display_name.casefold(), e.asset.asset_id),
+                reverse=True,
+            )
 
         usage = self._usage_index(paths, config.image_extensions)
         result: list[AssetSearchResult] = []
@@ -388,6 +516,8 @@ class AssetSearchService:
                 continue
             if filters.posted is False and asset_usage:
                 continue
+            marks = all_marks.get(asset.asset_id, [])
+            asset_tags = [m[4:] for m in marks if m.startswith("tag:")]
             result.append(
                 AssetSearchResult(
                     asset_id=asset.asset_id,
@@ -398,20 +528,34 @@ class AssetSearchService:
                     image_format=asset.image.format,
                     values=entry.values,
                     facets=entry.facets,
+                    tags=asset_tags,
                     warnings=[*asset.warnings, *entry.facet_warnings],
                     usage=asset_usage,
                 )
             )
         return result
 
+    def list_tags(
+        self,
+        root: str | Path,
+        *,
+        catalog: CatalogRepository | None = None,
+    ) -> list[dict[str, Any]]:
+        paths, _ = load_workspace(root)
+        cat = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        return cat.get_all_tags()
+
     def facets(
         self,
         root: str | Path,
         *,
         import_id: str | None = None,
+        import_ids: Collection[str] | None = None,
+        catalog: CatalogRepository | None = None,
     ) -> dict[str, list[str]]:
         paths, config = load_workspace(root)
-        entries = self._get_search_entries(paths, config, import_id)
+        target_imports = import_ids or (import_id if import_id and import_id != "__all__" else None)
+        entries = self._get_search_entries(paths, config, target_imports, catalog=catalog)
         result = {field: set() for field in FACET_FIELDS}
         for entry in entries:
             for field, values in entry.facets.items():
@@ -568,6 +712,7 @@ class NodeSearchService:
         role: str,
         query: str = "",
         import_id: str | None = None,
+        import_ids: Collection[str] | None = None,
         offset: int = 0,
         limit: int = 20,
     ) -> NodeListResult:
@@ -579,14 +724,25 @@ class NodeSearchService:
         if not 1 <= limit <= 100:
             raise ValueError("limit 必须在 1 到 100 之间")
 
+        # 规范化 import_ids 格式用于缓存 key
+        norm_ids: tuple[str, ...] | str | None = None
+        if import_ids:
+            clean_list = sorted({str(x).strip() for x in import_ids if str(x).strip() and str(x).strip() != "__all__"})
+            if len(clean_list) == 1:
+                norm_ids = clean_list[0]
+            elif len(clean_list) > 1:
+                norm_ids = tuple(clean_list)
+        elif import_id and import_id.strip() and import_id.strip() != "__all__":
+            norm_ids = import_id.strip()
+
         paths, _ = load_workspace(root)
         catalog_mtime = int(paths.catalog.stat().st_mtime_ns) if paths.catalog.is_file() else 0
-        cache_key = (str(paths.catalog).casefold(), catalog_mtime, normalized_role, import_id)
+        cache_key = (str(paths.catalog).casefold(), catalog_mtime, normalized_role, norm_ids)
 
         if cache_key not in _NODE_CANDIDATES_CACHE:
             catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
             options: dict[str, NodeOption] = {}
-            for node_id, ref in catalog.node_candidates(normalized_role, import_id):
+            for node_id, ref in catalog.node_candidates(normalized_role, import_id=import_id, import_ids=import_ids):
                 raw_value = node_id or _name_from_ref(ref) or ""
                 name = DEFAULT_NODE_IDENTITY_NORMALIZER.normalize(normalized_role, raw_value)
                 if not name:
