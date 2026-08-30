@@ -143,6 +143,8 @@ class PixivAutoConfig(BaseModel):
     r18: bool = True
     allow_tag_edit: bool = True
     original: bool = False
+    schedule_max_delay_minutes: int = 240
+    publish_cooldown_minutes: int = 10
     pixiv_cookie: str = ""
     pixiv_token: str = ""
 
