@@ -20,7 +20,7 @@ class MosaicSettings:
     detector: str
     method: str
     parts: tuple[str, ...]
-    pixel_size: int = 15
+    pixel_size: int = 10
     blur_radius: int = 12
     line_width_range: tuple[int, int] = (1, 4)
     line_spacing_range: tuple[int, int] = (3, 8)
@@ -47,7 +47,7 @@ class MosaicSettings:
             detector=detector,
             method=method,
             parts=parts,
-            pixel_size=_bounded_int(options.get("pixel_size", 15), "pixel_size", 1, 100),
+            pixel_size=_bounded_int(options.get("pixel_size", 10), "pixel_size", 1, 100),
             blur_radius=_bounded_int(options.get("blur_radius", 12), "blur_radius", 1, 100),
             line_width_range=_range(
                 options.get("line_width_range", (1, 4)), "line_width_range", 1, 100

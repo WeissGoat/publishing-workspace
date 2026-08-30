@@ -6,5 +6,8 @@ __pycache__/
 htmlcov/
 .superpowers/
 examples/workspace/workspace/backups/
+examples/workspace/logs/
+*.log
+logs/
 models/
 tmp/

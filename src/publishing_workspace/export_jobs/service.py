@@ -35,7 +35,13 @@ class ExportJobService:
         self._lock = threading.Lock()
         self._closed = False
 
-    def start(self, root: str | Path, task_id: str, enable_mosaic: bool | None = None) -> ExportJob:
+    def start(
+        self,
+        root: str | Path,
+        task_id: str,
+        enable_mosaic: bool | None = None,
+        mosaic_pixel_size: int | None = None,
+    ) -> ExportJob:
         """启动指定投稿任务的后台导出；若已有排队或运行中的任务，直接复用。"""
         paths, _ = load_workspace(root)
         task_paths = TaskPaths.from_workspace(paths, task_id)
@@ -47,6 +53,7 @@ class ExportJobService:
                 from ..tasks.repository import TaskRepository
                 from ..tasks.models import OperationConfig
                 task_config = TaskRepository.load(task_paths)
+                psize = mosaic_pixel_size if mosaic_pixel_size is not None else 10
                 task_config.processing.operations["mosaic"] = OperationConfig(
                     enabled=bool(enable_mosaic),
                     adapter="anr_plugin_auto_mosaics",
@@ -54,6 +61,7 @@ class ExportJobService:
                         "detector": "yolo_sam",
                         "method": "pixel",
                         "parts": ["penis", "pussy"],
+                        "pixel_size": psize,
                     },
                 )
                 TaskRepository.save(task_paths, task_config)
