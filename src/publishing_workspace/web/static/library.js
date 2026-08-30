@@ -2291,6 +2291,53 @@
     popover.style.top = `${y}px`;
   }
 
+  let activePeekCleanup = null;
+
+  function startHoldPeek(targetAssetId, targetDisplayName) {
+    if (!elements.previewImage) return;
+    if (activePeekCleanup) {
+      activePeekCleanup();
+    }
+
+    const originalSrc = elements.previewImage.src;
+    const targetUrl = `/api/assets/${encodeURIComponent(targetAssetId)}/preview?v=${Date.now()}`;
+
+    // 临时隐藏悬浮放大镜
+    if (elements.lbHoverPreviewPopover) {
+      elements.lbHoverPreviewPopover.classList.add("hidden");
+    }
+
+    elements.previewImage.src = targetUrl;
+
+    const imgArea = elements.previewImage.closest(".lightbox-image-area") || elements.previewImage.parentElement;
+    let banner = document.getElementById("lb-peek-banner");
+    if (!banner && imgArea) {
+      banner = document.createElement("div");
+      banner.id = "lb-peek-banner";
+      banner.className = "lb-peek-indicator-banner";
+      imgArea.appendChild(banner);
+    }
+    if (banner) {
+      banner.innerHTML = `<span>👁️ 正在对比: <strong>${escapeHtml(targetDisplayName || targetAssetId)}</strong></span> <span style="font-size:11px;opacity:0.85;margin-left:4px;">(松开鼠标恢复原图)</span>`;
+    }
+
+    const stopHoldPeek = () => {
+      elements.previewImage.src = originalSrc;
+      const b = document.getElementById("lb-peek-banner");
+      if (b) b.remove();
+      document.querySelectorAll(".lb-thumb-peek-badge.active, .lb-rel-peek-btn.active").forEach((el) => el.classList.remove("active"));
+      window.removeEventListener("mouseup", stopHoldPeek);
+      window.removeEventListener("touchend", stopHoldPeek);
+      window.removeEventListener("blur", stopHoldPeek);
+      activePeekCleanup = null;
+    };
+
+    window.addEventListener("mouseup", stopHoldPeek);
+    window.addEventListener("touchend", stopHoldPeek);
+    window.addEventListener("blur", stopHoldPeek);
+    activePeekCleanup = stopHoldPeek;
+  }
+
   function renderRelatedDimension(dimKey) {
     if (!elements.lbRelatedList) return;
     const rel = state.lightbox.currentRelated;
@@ -2360,9 +2407,9 @@
 
       return `
         <div class="lb-related-card" data-asset-id="${escapeHtml(item.asset_id)}">
-          <div class="lb-related-thumb-wrap" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="点击查看详情 (长按👁️对比)">
+          <div class="lb-related-thumb-wrap" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="点击查看详情">
             <img class="lb-related-thumb-img" src="/api/assets/${encodeURIComponent(item.asset_id)}/preview?v=${Date.now()}" alt="${escapeHtml(item.display_name)}" loading="lazy">
-            <span class="lb-thumb-peek-badge" title="长按可在左侧大图临时对比">👁️ 对比</span>
+            <button type="button" class="lb-thumb-peek-badge" data-action="hold-peek" data-asset-id="${escapeHtml(item.asset_id)}" title="按住可在左侧大图临时对比">👁️ 对比</button>
           </div>
           <div class="lb-related-info">
             <strong class="lb-related-name" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</strong>
@@ -2374,6 +2421,7 @@
           </div>
           <div class="lb-related-actions">
             <button type="button" class="lb-rel-view-btn" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="查看该图片详情（可按顶部返回切回）">🔍 查看</button>
+            <button type="button" class="lb-rel-peek-btn" data-action="hold-peek" data-asset-id="${escapeHtml(item.asset_id)}" title="按住可在左侧大图临时对比">👁️ 对比</button>
             ${jumpBtnHtml}
           </div>
         </div>
@@ -2383,7 +2431,7 @@
     // 绑定查看事件 (进入历史栈)
     elements.lbRelatedList.querySelectorAll('[data-action="view-related"]').forEach((el) => {
       el.addEventListener("click", (e) => {
-        if (e.target.closest(".lb-thumb-peek-badge")) return;
+        if (e.target.closest('[data-action="hold-peek"]')) return;
         e.stopPropagation();
         const targetId = el.dataset.assetId || el.closest("[data-asset-id]")?.dataset.assetId;
         if (targetId) {
@@ -2392,24 +2440,28 @@
       });
     });
 
-    // 绑定悬浮放大镜与按住临时对比 (Peek)
+    // 绑定悬浮大图放大镜 (Hover Popover)
     elements.lbRelatedList.querySelectorAll(".lb-related-card").forEach((card) => {
       const assetId = card.dataset.assetId;
       const targetItem = items.find((it) => it.asset_id === assetId);
       if (!targetItem) return;
 
       const thumbWrap = card.querySelector(".lb-related-thumb-wrap");
-      const peekBadge = card.querySelector(".lb-thumb-peek-badge");
       const targetPreviewUrl = `/api/assets/${encodeURIComponent(assetId)}/preview?v=${Date.now()}`;
 
       if (thumbWrap) {
         thumbWrap.addEventListener("mouseenter", (e) => {
           if (!elements.lbHoverPreviewPopover) return;
+          if (activePeekCleanup) return; // 对比进行中不弹窗
           elements.lbHoverPreviewPopover.innerHTML = `<img src="${targetPreviewUrl}" alt="${escapeHtml(targetItem.display_name)}" />`;
           elements.lbHoverPreviewPopover.classList.remove("hidden");
           positionHoverPopover(e);
         });
         thumbWrap.addEventListener("mousemove", (e) => {
+          if (activePeekCleanup) {
+            if (elements.lbHoverPreviewPopover) elements.lbHoverPreviewPopover.classList.add("hidden");
+            return;
+          }
           positionHoverPopover(e);
         });
         thumbWrap.addEventListener("mouseleave", () => {
@@ -2418,46 +2470,24 @@
           }
         });
       }
+    });
 
-      const startPeek = (e) => {
-        if (e.button && e.button !== 0) return;
-        state.lightbox._originalPreviewSrc = elements.previewImage.src;
-        elements.previewImage.src = targetPreviewUrl;
+    // 绑定按住临时对比 (Hold to Peek)
+    elements.lbRelatedList.querySelectorAll('[data-action="hold-peek"]').forEach((btn) => {
+      const aid = btn.dataset.assetId;
+      const targetItem = items.find((it) => it.asset_id === aid);
+      const dName = targetItem?.display_name || aid;
 
-        let banner = document.getElementById("lb-peek-banner");
-        if (!banner && elements.previewImage.parentElement) {
-          banner = document.createElement("div");
-          banner.id = "lb-peek-banner";
-          banner.className = "lb-peek-indicator-banner";
-          elements.previewImage.parentElement.appendChild(banner);
-        }
-        if (banner) {
-          banner.textContent = `👁️ 正在对比: ${targetItem.display_name || ''} (松开恢复)`;
-        }
+      const handlePress = (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        btn.classList.add("active");
+        startHoldPeek(aid, dName);
       };
 
-      const stopPeek = () => {
-        if (state.lightbox._originalPreviewSrc) {
-          elements.previewImage.src = state.lightbox._originalPreviewSrc;
-          delete state.lightbox._originalPreviewSrc;
-        }
-        const banner = document.getElementById("lb-peek-banner");
-        if (banner) banner.remove();
-      };
-
-      if (peekBadge) {
-        peekBadge.addEventListener("mousedown", (e) => {
-          e.stopPropagation();
-          startPeek(e);
-        });
-        peekBadge.addEventListener("mouseup", stopPeek);
-        peekBadge.addEventListener("mouseleave", stopPeek);
-        peekBadge.addEventListener("touchstart", (e) => {
-          e.stopPropagation();
-          startPeek(e);
-        }, { passive: true });
-        peekBadge.addEventListener("touchend", stopPeek, { passive: true });
-      }
+      btn.addEventListener("mousedown", handlePress);
+      btn.addEventListener("touchstart", handlePress, { passive: false });
     });
 
     elements.lbRelatedList.querySelectorAll('[data-action="jump-rel-snap"]').forEach((btn) => {
@@ -6294,6 +6324,7 @@
 
   if (elements.previewDialog) {
     elements.previewDialog.addEventListener("close", () => {
+      if (activePeekCleanup) activePeekCleanup();
       state.lightbox.history = [];
       updateLightboxBackButton();
       if (elements.lbHoverPreviewPopover) {
