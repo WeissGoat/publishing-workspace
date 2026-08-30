@@ -286,24 +286,58 @@ class AssetSearchService:
             next_offset=next_offset,
         )
 
-    def preload(
+    def preload_fast(
         self,
         root: str | Path,
         *,
         catalog: CatalogRepository | None = None,
     ) -> None:
-        """在后端服务启动时轻量预热使用索引与最近活跃快照索引（毫秒级瞬开）。"""
+        """在后端服务启动时轻量预热使用索引、最近1个活跃快照与节点候选（毫秒级瞬开）。"""
         paths, config = load_workspace(root)
         catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
         # 1. 预热使用索引（秒级构建并缓存）
         self._usage_index(paths, config.image_extensions)
-        # 2. 仅预热最新的 1 个活跃快照索引（其余快照在用户切换时按需毫秒级构建并缓存）
+        # 2. 仅预热最新的 1 个活跃快照索引
         sources = catalog_inst.import_sources()
         if sources:
             self._get_search_entries(paths, config, sources[0][0], catalog=catalog_inst)
         # 3. 预热节点候选
         for role in NODE_FIELDS:
             NodeSearchService().search(root, role=role, limit=1)
+
+    def preload_snapshot(
+        self,
+        root: str | Path,
+        import_id: str,
+        *,
+        catalog: CatalogRepository | None = None,
+    ) -> None:
+        """后台低优先级预热指定单个快照，存入内存搜索索引缓存。"""
+        if not import_id:
+            return
+        paths, config = load_workspace(root)
+        catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        self._get_search_entries(paths, config, import_id, catalog=catalog_inst)
+
+    def preload_all_aggregated(
+        self,
+        root: str | Path,
+        *,
+        catalog: CatalogRepository | None = None,
+    ) -> None:
+        """在所有单快照已在内存中时，秒级无盘拼接出全量聚合（__all__）索引。"""
+        paths, config = load_workspace(root)
+        catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        self._get_search_entries(paths, config, None, catalog=catalog_inst)
+
+    def preload(
+        self,
+        root: str | Path,
+        *,
+        catalog: CatalogRepository | None = None,
+    ) -> None:
+        """默认快速预热（保持向后兼容）。"""
+        self.preload_fast(root, catalog=catalog)
 
     def _get_search_entries(
         self,

@@ -53,16 +53,66 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
             logger.warning("Web 启动时恢复中断导出：count=%s", recovered)
 
         async def _warmup():
+            search_service = AssetSearchService()
+            catalog = getattr(app.state, "catalog", None)
+            # 阶段 1：首屏核心活跃快照与使用索引快速就绪（耗时约 0.2~0.5s）
             try:
                 t0 = time.perf_counter()
-                logger.info("Web 正在后台预热素材检索索引与节点缓存...")
-                catalog = getattr(app.state, "catalog", None)
+                logger.info("Web 正在预热首屏素材检索索引与节点缓存...")
                 await asyncio.to_thread(
-                    AssetSearchService().preload, publishing_root, catalog=catalog
+                    search_service.preload_fast, publishing_root, catalog=catalog
                 )
-                logger.info("Web 检索索引后台预热完成 (耗时: %.2fs)", time.perf_counter() - t0)
+                logger.info("Web 首屏素材检索索引就绪 (耗时: %.2fs)", time.perf_counter() - t0)
             except Exception as exc:
-                logger.warning("Web 检索索引后台预热跳过：%s", exc)
+                logger.warning("Web 首屏素材检索索引预热跳过：%s", exc)
+
+            # 阶段 2：避峰静默等待（等待 3.5 秒，让前端首屏并发获取资源完全不受干扰）
+            try:
+                await asyncio.sleep(3.5)
+            except asyncio.CancelledError:
+                return
+
+            # 阶段 3：多阶段空闲温和后台预热剩余历史快照
+            try:
+                paths, _ = load_workspace(publishing_root)
+                catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+                sources = catalog_inst.import_sources()
+                remaining = sources[1:]
+                if remaining:
+                    logger.info("Web 开始后台空闲预热 %d 个历史快照...", len(remaining))
+                    for idx, (imp_id, _) in enumerate(remaining, 1):
+                        try:
+                            t_snap = time.perf_counter()
+                            await asyncio.to_thread(
+                                search_service.preload_snapshot,
+                                publishing_root,
+                                imp_id,
+                                catalog=catalog_inst,
+                            )
+                            logger.info(
+                                "Web 空闲预热快照 (%d/%d): id=%s (耗时: %.2fs)",
+                                idx, len(remaining), imp_id[:8], time.perf_counter() - t_snap
+                            )
+                        except Exception as exc:
+                            logger.info("Web 空闲预热快照跳过: id=%s (%s)", imp_id[:8], exc)
+
+                        # 协作式休眠让步，释放 GIL 锁与磁盘 I/O
+                        await asyncio.sleep(0.5)
+
+                    # 阶段 4：所有单快照已在内存中，秒级无盘拼接出全量聚合（__all__）索引
+                    try:
+                        await asyncio.to_thread(
+                            search_service.preload_all_aggregated,
+                            publishing_root,
+                            catalog=catalog_inst,
+                        )
+                        logger.info("Web 全部历史快照后台空闲预热完成 (共 %d 个快照已常驻内存)", len(sources))
+                    except Exception as exc:
+                        logger.debug("Web 全量聚合缓存预热跳过：%s", exc)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("Web 历史快照后台空闲预热跳过：%s", exc)
 
         async def _schedule_daemon():
             from ..plans.executor import SubmissionExecutor
