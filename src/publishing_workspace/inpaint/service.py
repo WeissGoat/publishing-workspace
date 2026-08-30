@@ -147,6 +147,35 @@ def _sync_inpainted_asset_to_tasks(
                         except Exception as exc:
                             logger.warning("同步更新任务图片失败: %s - %s", file_path, exc)
 
+            # 2. 同步更新最新构建包 builds/latest 中的图片副本
+            latest_output = task_paths.builds_root / "latest" / "output"
+            if latest_output.is_dir():
+                for sub_dir in latest_output.iterdir():
+                    if not sub_dir.is_dir():
+                        continue
+                    for file_path in sub_dir.iterdir():
+                        if not file_path.is_file() or file_path.name.startswith("."):
+                            continue
+                        is_match = (
+                            file_path.name == asset_name
+                            or file_path.name.endswith(f"_{asset_name}")
+                        )
+                        if not is_match and old_sha:
+                            try:
+                                f_sha = _sha256_file(file_path).lower()
+                                if f_sha == old_sha:
+                                    is_match = True
+                            except Exception:
+                                pass
+                        if is_match:
+                            try:
+                                tmp_file = file_path.with_name(f".{file_path.name}.inpaint.{uuid.uuid4().hex[:8]}.tmp")
+                                tmp_file.write_bytes(new_bytes)
+                                os.replace(tmp_file, file_path)
+                                task_touched = True
+                            except Exception as exc:
+                                logger.warning("同步更新最新构建图片失败: %s - %s", file_path, exc)
+
         if task_touched:
             updated_tasks += 1
 
@@ -169,42 +198,39 @@ class InpaintService:
         mask_bytes: bytes,
         prompt: str | None = None,
         negative_prompt: str | None = None,
-        strength: float = 0.7,
+        strength: float = 0.70,
         count: int = 2,
+        model: str = "nai-diffusion-4-curated-preview",
     ) -> InpaintSessionResult:
-        """Run inpaint generation for an asset and return candidates list."""
+        """Execute NovelAI Inpainting generation for the specified asset."""
         catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
         assets = catalog.assets_by_ids([asset_id])
         asset = assets.get(asset_id)
         if asset is None or not Path(asset.path).is_file():
-            raise FileNotFoundError(f"找不到资产源文件: asset_id={asset_id}")
+            raise FileNotFoundError(f"找不到原始资产文件: asset_id={asset_id}")
 
         asset_path = Path(asset.path)
         image_bytes = asset_path.read_bytes()
 
-        # 继承原图元数据
+        # 读取原图提示词与生成参数
         gen_params = _extract_asset_gen_params(asset_path)
-        final_prompt = prompt if prompt is not None and prompt.strip() else gen_params["prompt"]
-        final_negative = (
-            negative_prompt if negative_prompt is not None and negative_prompt.strip() else gen_params["negative_prompt"]
-        )
-        model = gen_params["model"]
-        steps = gen_params["steps"]
-        scale = gen_params["scale"]
-        sampler = gen_params["sampler"]
-        noise_schedule = gen_params["noise_schedule"]
-        cfg_rescale = gen_params["cfg_rescale"]
+        final_prompt = prompt.strip() if prompt is not None and prompt.strip() else gen_params["prompt"]
+        final_negative = negative_prompt.strip() if negative_prompt is not None and negative_prompt.strip() else gen_params["negative_prompt"]
+        model = model or gen_params.get("model") or "nai-diffusion-4-curated-preview"
+        steps = gen_params.get("steps") or 28
+        scale = gen_params.get("scale") or 6.0
+        sampler = gen_params.get("sampler") or "k_euler_ancestral"
+        noise_schedule = gen_params.get("noise_schedule") or "karras"
+        cfg_rescale = gen_params.get("cfg_rescale") or 0.7
 
-        # 创建 session 缓存目录
-        session_id = f"inp_{uuid.uuid4().hex[:12]}"
+        session_id = uuid.uuid4().hex
         session_dir = self.get_inpaint_tmp_dir(paths) / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        count = max(1, min(4, count))
+        candidates: list[InpaintCandidate] = []
 
-        # 并发生成 count 张候选图
-        async def _gen_one(index: int) -> InpaintCandidate:
-            cand_bytes, seed = await self.client.generate_single(
+        async def _gen_one(idx: int) -> InpaintCandidate:
+            res_bytes, seed = await self.client.generate_single(
                 image_bytes=image_bytes,
                 mask_bytes=mask_bytes,
                 prompt=final_prompt,
@@ -217,13 +243,13 @@ class InpaintService:
                 noise_schedule=noise_schedule,
                 cfg_rescale=cfg_rescale,
             )
-            cand_id = f"cand_{index}"
+            cand_id = f"cand_{idx}"
             cand_filename = f"{cand_id}.png"
-            cand_path = session_dir / cand_filename
-            cand_path.write_bytes(cand_bytes)
+            cand_file = session_dir / cand_filename
+            cand_file.write_bytes(res_bytes)
 
-            with Image.open(io.BytesIO(cand_bytes)) as img:
-                w, h = img.size
+            with Image.open(io.BytesIO(res_bytes)) as im:
+                w, h = im.size
 
             return InpaintCandidate(
                 candidate_id=cand_id,
@@ -232,11 +258,9 @@ class InpaintService:
                 seed=seed,
                 width=w,
                 height=h,
-                size_bytes=len(cand_bytes),
+                size_bytes=len(res_bytes),
             )
 
-        # 串行逐张生成 count 张候选图 (一张接一张生成，避免瞬时高并发)
-        candidates: list[InpaintCandidate] = []
         last_err: Exception | None = None
         for i in range(count):
             logger.info("开始生成 Inpaint 候选图 %d/%d (asset_id=%s)...", i + 1, count, asset_id)
@@ -313,12 +337,28 @@ class InpaintService:
             except Exception as exc:
                 logger.warning("提取并注入原图 PNG 元数据失败: %s", exc)
 
-        # 3. 原子覆写原图文件
-        tmp_target = asset_path.with_name(f".{asset_path.name}.inpaint.{uuid.uuid4().hex[:8]}.tmp")
-        tmp_target.write_bytes(new_bytes)
-        os.replace(tmp_target, asset_path)
+        # 3. 收集所有关联的物理文件路径（包含所有引用了该 asset_id 的 import_items 路径与别名）
+        all_target_paths: set[Path] = {asset_path}
+        with catalog.connection() as conn:
+            for row in conn.execute(
+                "SELECT DISTINCT resolved_path FROM import_items WHERE asset_id=? OR resolved_path=?",
+                (asset_id, str(asset_path)),
+            ):
+                if row[0]:
+                    p = Path(row[0])
+                    if p.is_file():
+                        all_target_paths.add(p)
 
-        # 4. 重新 Ingest 进 Catalog
+        # 4. 原子覆写所有关联的原图物理文件
+        for target_p in all_target_paths:
+            try:
+                tmp_target = target_p.with_name(f".{target_p.name}.inpaint.{uuid.uuid4().hex[:8]}.tmp")
+                tmp_target.write_bytes(new_bytes)
+                os.replace(tmp_target, target_p)
+            except Exception as exc:
+                logger.warning("覆写关联物理文件失败: %s - %s", target_p, exc)
+
+        # 5. 重新 Ingest 进 Catalog
         stat = asset_path.stat()
         readers = default_image_node_reader_registry()
 
