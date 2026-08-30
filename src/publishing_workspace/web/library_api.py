@@ -1280,8 +1280,53 @@ def register_library_routes(app: FastAPI) -> None:
                 conn.execute(
                     "DELETE FROM asset_marks WHERE asset_id=? AND mark='favorite'", (asset_id,)
                 )
-                conn.commit()
         return {"asset_id": asset_id, "favorited": favorited}
+
+    @app.post("/api/library/batch-action")
+    async def library_batch_action(req: Request):
+        from ..catalog.repository import CatalogRepository, _chunks
+        from ..config import load_workspace
+
+        body = await req.json()
+        raw_asset_ids = body.get("asset_ids", [])
+        action = str(body.get("action", "")).strip()
+        tags = [str(t).strip() for t in body.get("tags", []) if str(t).strip()]
+
+        asset_ids = [str(a).strip() for a in raw_asset_ids if str(a).strip()]
+        if not asset_ids:
+            raise HTTPException(status_code=422, detail="asset_ids 列表不能为空")
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        catalog = getattr(app.state, "catalog", None) or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+
+        if action == "favorite":
+            catalog.set_asset_marks(asset_ids, mark="favorite", note="Web UI batch favorite")
+        elif action == "unfavorite":
+            with catalog.connection() as conn:
+                for chunk in _chunks(asset_ids):
+                    ph = ",".join("?" for _ in chunk)
+                    conn.execute(f"DELETE FROM asset_marks WHERE mark='favorite' AND asset_id IN ({ph})", chunk)
+                conn.commit()
+        elif action == "mark_posted":
+            catalog.set_asset_marks(asset_ids, mark="posted", note="Web UI batch mark posted")
+        elif action == "unmark_posted":
+            with catalog.connection() as conn:
+                for chunk in _chunks(asset_ids):
+                    ph = ",".join("?" for _ in chunk)
+                    conn.execute(f"DELETE FROM asset_marks WHERE (mark='posted' OR mark LIKE 'posted:%') AND asset_id IN ({ph})", chunk)
+                conn.commit()
+        elif action == "add_tags":
+            if tags:
+                catalog.set_asset_tags(asset_ids, tags=tags, note="Web UI batch tagging")
+        else:
+            raise HTTPException(status_code=400, detail=f"不支持的批量操作：{action}")
+
+        return {
+            "success": True,
+            "action": action,
+            "count": len(asset_ids),
+            "asset_ids": asset_ids,
+        }
 
     def _extract_image_file_metadata(p: Path) -> dict[str, Any]:
         import datetime

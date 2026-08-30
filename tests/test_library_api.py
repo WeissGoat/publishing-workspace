@@ -643,6 +643,29 @@ def test_asset_details_includes_related(tmp_path: Path):
     assert "time_adjacent" in rel_data["dimensions"]
 
 
+def test_library_batch_actions(tmp_path: Path):
+    client, import_id, asset_ids = client_with_catalog(tmp_path)
+    assert len(asset_ids) >= 1
+
+    # 1. 批量收藏
+    fav_resp = client.post("/api/library/batch-action", json={"asset_ids": asset_ids, "action": "favorite"})
+    assert fav_resp.status_code == 200
+    assert fav_resp.json()["success"] is True
+
+    # 2. 批量打标签
+    tag_resp = client.post("/api/library/batch-action", json={"asset_ids": asset_ids, "action": "add_tags", "tags": ["batch_test_tag"]})
+    assert tag_resp.status_code == 200
+
+    # 3. 批量标记已投稿
+    post_resp = client.post("/api/library/batch-action", json={"asset_ids": asset_ids, "action": "mark_posted"})
+    assert post_resp.status_code == 200
+
+    # 4. 批量取消收藏
+    unfav_resp = client.post("/api/library/batch-action", json={"asset_ids": asset_ids, "action": "unfavorite"})
+    assert unfav_resp.status_code == 200
+
+
+
 
 
 

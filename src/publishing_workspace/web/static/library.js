@@ -26,6 +26,9 @@
     requestToken: 0,
     loadedAssets: new Map(),
     selectedAssetIds: new Set(),
+    focusedAssetId: null,
+    lastSelectedAssetId: null,
+    isBatchMode: false,
     datasetAssets: [],
     datasetImportId: null,
     cardElements: new Map(),
@@ -135,10 +138,21 @@
     cardSizeSlider: document.getElementById("card-size-slider"),
     cardSizeVal: document.getElementById("card-size-val"),
     sortSelect: document.getElementById("sort-select"),
+    btnBatchToggle: document.getElementById("btn-batch-toggle"),
     selectedCountBadge: document.getElementById("selected-count-badge"),
     selectAllVisibleBtn: document.getElementById("select-all-visible-btn"),
     clearSelectionBtn: document.getElementById("clear-selection-btn"),
     addToSetBtn: document.getElementById("add-to-set-btn"),
+    galleryBatchBar: document.getElementById("gallery-batch-bar"),
+    batchSelectedCount: document.getElementById("batch-selected-count"),
+    batchBtnFav: document.getElementById("batch-btn-fav"),
+    batchBtnUnfav: document.getElementById("batch-btn-unfav"),
+    batchBtnPost: document.getElementById("batch-btn-post"),
+    batchBtnUnpost: document.getElementById("batch-btn-unpost"),
+    batchBtnTag: document.getElementById("batch-btn-tag"),
+    batchBtnAddSet: document.getElementById("batch-btn-add-set"),
+    batchBtnCopyPaths: document.getElementById("batch-btn-copy-paths"),
+    batchBtnClear: document.getElementById("batch-btn-clear"),
     assetWaterfall: document.getElementById("asset-waterfall"),
     scrollSentinel: document.getElementById("scroll-sentinel"),
     loadingSpinner: document.getElementById("loading-spinner"),
@@ -1123,17 +1137,9 @@
       card = state.cardElements.get(assetId);
     }
 
-    // 3. 平滑滚动并高亮目标卡片
+    // 3. 平滑滚动并持久高亮目标卡片（持久聚焦边框 + 1.2s 聚光灯聚焦）
     if (card) {
-      requestAnimationFrame(() => {
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
-        card.classList.remove("card-locate-highlight");
-        void card.offsetWidth; // 触发动画重绘
-        card.classList.add("card-locate-highlight");
-        setTimeout(() => {
-          card.classList.remove("card-locate-highlight");
-        }, 3000);
-      });
+      setFocusedCard(assetId, true, true);
       showNotice(`✨ 已定位至快照【${snapName || importId}】第 ${(targetOrder ?? 0) + 1} 张图片`, "success");
     } else {
       showNotice(`已切换至快照【${snapName || importId}】`, "info");
@@ -1460,13 +1466,21 @@
       ? `<span class="asset-order-badge" title="点击取消选中"><span class="badge-num">${orderIdx + 1}</span></span>`
       : "";
 
+    const isFocused = state.focusedAssetId === item.asset_id;
+    if (isFocused) card.classList.add("is-focused-card");
+    if (isSelected) {
+      card.classList.add("selected");
+      card.classList.add("is-batch-selected");
+    }
+
     const tagsHtml = (item.tags && item.tags.length > 0)
       ? `<div class="asset-tags-row" style="margin-top: 3px; display: flex; flex-wrap: wrap; gap: 3px;">${item.tags.map(t => `<span class="asset-tag-badge">🏷️ ${escapeHtml(t)}</span>`).join("")}</div>`
       : "";
 
     card.innerHTML = `
       <div class="asset-thumb-wrap" style="aspect-ratio: ${ratio};">
-        <input type="checkbox" class="asset-checkbox" ${isSelected ? "checked" : ""}>
+        <div class="card-batch-checkbox ${isSelected ? "checked" : ""}" data-action="toggle-batch-select" title="勾选多选 (按住 Ctrl / Shift 可快速多选)">✓</div>
+        <input type="checkbox" class="asset-checkbox" ${isSelected ? "checked" : ""} style="display:none;">
         ${orderBadgeHtml}
         ${usageBadgeHtml}
         <button class="asset-star-btn ${isFav ? "starred" : ""}" type="button" title="收藏">★</button>
@@ -1478,7 +1492,6 @@
       </div>
     `;
 
-    const checkbox = card.querySelector(".asset-checkbox");
     const starBtn = card.querySelector(".asset-star-btn");
     const orderBadge = card.querySelector(".asset-order-badge");
 
@@ -1496,46 +1509,59 @@
       e.preventDefault();
       const nowFav = toggleFavorite(item.asset_id);
       starBtn.classList.toggle("starred", nowFav);
-      // 弹出动画
       starBtn.classList.remove("star-pop");
       void starBtn.offsetWidth; // 强制 reflow 以重触发动画
       starBtn.classList.add("star-pop");
-      // 如果正在筛选收藏状态，重新过滤
       if (state.filters.favorite_mode !== "all") {
         applyClientFilter();
       }
     });
 
-    checkbox.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleAssetSelection(item.asset_id, checkbox.checked);
-    });
-
-    checkbox.addEventListener("change", (e) => {
-      e.stopPropagation();
-    });
-
-    // 点击缩略图或双击卡片打开大图与详情 Lightbox
-    const thumbImg = card.querySelector(".asset-thumb");
-    if (thumbImg) {
-      thumbImg.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openLightbox(item.asset_id);
-      });
-    }
-
+    // 单击卡片或各部件交互
     card.addEventListener("click", (e) => {
-      if (
-        e.target.closest(".asset-star-btn") ||
-        e.target.closest(".asset-checkbox") ||
-        e.target.closest(".asset-order-badge") ||
-        e.target.closest(".asset-thumb")
-      ) {
+      if (e.target.closest(".asset-star-btn") || e.target.closest(".asset-order-badge")) {
         return;
       }
-      const newState = !state.selectedAssetIds.has(item.asset_id);
-      checkbox.checked = newState;
-      toggleAssetSelection(item.asset_id, newState);
+
+      // 1. 点击批量勾选圆标 -> 触发多选
+      if (e.target.closest(".card-batch-checkbox") || e.target.dataset.action === "toggle-batch-select") {
+        e.stopPropagation();
+        const nextState = !state.selectedAssetIds.has(item.asset_id);
+        toggleAssetSelection(item.asset_id, nextState);
+        return;
+      }
+
+      // 2. Ctrl / Cmd 点选 -> 切换加入多选集合
+      if (e.ctrlKey || e.metaKey) {
+        e.stopPropagation();
+        const nextState = !state.selectedAssetIds.has(item.asset_id);
+        toggleAssetSelection(item.asset_id, nextState);
+        setFocusedCard(item.asset_id, false, false);
+        return;
+      }
+
+      // 3. Shift 连选 -> 区间多选
+      if (e.shiftKey) {
+        e.stopPropagation();
+        selectRangeTo(item.asset_id);
+        setFocusedCard(item.asset_id, false, false);
+        return;
+      }
+
+      // 4. 处于批量管理模式下，单击卡片即切换多选
+      if (state.isBatchMode) {
+        e.stopPropagation();
+        const nextState = !state.selectedAssetIds.has(item.asset_id);
+        toggleAssetSelection(item.asset_id, nextState);
+        setFocusedCard(item.asset_id, false, false);
+        return;
+      }
+
+      // 5. 普通单击：设置当前聚焦卡片，并打开大图详情
+      setFocusedCard(item.asset_id, false, false);
+      if (e.target.closest(".asset-thumb")) {
+        openLightbox(item.asset_id);
+      }
     });
 
     card.addEventListener("dblclick", (e) => {
@@ -1546,31 +1572,125 @@
     return card;
   }
 
+  // ================= 瀑布流持久聚焦与聚光灯聚焦 =================
+
+  function setFocusedCard(assetId, smoothScroll = false, withSpotlight = false) {
+    if (!assetId) return;
+
+    if (state.focusedAssetId && state.focusedAssetId !== assetId) {
+      const oldCard = state.cardElements.get(state.focusedAssetId) || elements.assetWaterfall?.querySelector(`.asset-card[data-asset-id="${state.focusedAssetId}"]`);
+      if (oldCard) oldCard.classList.remove("is-focused-card");
+    }
+
+    state.focusedAssetId = assetId;
+    const card = state.cardElements.get(assetId) || elements.assetWaterfall?.querySelector(`.asset-card[data-asset-id="${assetId}"]`);
+    if (card) {
+      card.classList.add("is-focused-card");
+      if (smoothScroll) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      if (withSpotlight && elements.assetWaterfall) {
+        elements.assetWaterfall.classList.add("waterfall-spotlight-active");
+        setTimeout(() => {
+          if (elements.assetWaterfall) {
+            elements.assetWaterfall.classList.remove("waterfall-spotlight-active");
+          }
+        }, 1200);
+      }
+    }
+  }
+
+  function clearCardFocus() {
+    if (state.focusedAssetId) {
+      const oldCard = state.cardElements.get(state.focusedAssetId) || elements.assetWaterfall?.querySelector(`.asset-card[data-asset-id="${state.focusedAssetId}"]`);
+      if (oldCard) oldCard.classList.remove("is-focused-card");
+      state.focusedAssetId = null;
+    }
+  }
+
+  // ================= 批量多选管理模式与多选操作 =================
+
+  function toggleBatchMode(forceState = null) {
+    state.isBatchMode = forceState !== null ? Boolean(forceState) : !state.isBatchMode;
+    document.body.classList.toggle("body-batch-mode-active", state.isBatchMode);
+    if (elements.btnBatchToggle) {
+      elements.btnBatchToggle.classList.toggle("active", state.isBatchMode);
+      elements.btnBatchToggle.textContent = state.isBatchMode ? "✓ 退出批量" : "☑ 批量管理";
+    }
+    if (!state.isBatchMode && state.selectedAssetIds.size === 0) {
+      if (elements.galleryBatchBar) elements.galleryBatchBar.classList.add("hidden");
+    }
+  }
+
   function toggleAssetSelection(assetId, isSelected) {
     if (isSelected) {
-      if (!state.selectedAssetIds.has(assetId)) {
-        state.selectedAssetIds.add(assetId);
-      }
+      state.selectedAssetIds.add(assetId);
+      state.lastSelectedAssetId = assetId;
     } else {
       state.selectedAssetIds.delete(assetId);
     }
     updateSelectionBadges();
   }
 
+  function selectRangeTo(targetAssetId) {
+    if (!targetAssetId) return;
+    const cards = Array.from(elements.assetWaterfall.querySelectorAll(".asset-card:not(.filtered-out)"));
+    if (!state.lastSelectedAssetId) {
+      toggleAssetSelection(targetAssetId, true);
+      return;
+    }
+    const idx1 = cards.findIndex(c => c.dataset.assetId === state.lastSelectedAssetId);
+    const idx2 = cards.findIndex(c => c.dataset.assetId === targetAssetId);
+    if (idx1 === -1 || idx2 === -1) {
+      toggleAssetSelection(targetAssetId, true);
+      return;
+    }
+    const start = Math.min(idx1, idx2);
+    const end = Math.max(idx1, idx2);
+    for (let i = start; i <= end; i++) {
+      const aid = cards[i].dataset.assetId;
+      if (aid) state.selectedAssetIds.add(aid);
+    }
+    state.lastSelectedAssetId = targetAssetId;
+    updateSelectionBadges();
+  }
+
   function updateSelectionBadges() {
     const selectedArr = Array.from(state.selectedAssetIds);
-    elements.selectedCountBadge.textContent = `已选 ${selectedArr.length} 项`;
+    const count = selectedArr.length;
 
-    // 遍历瀑布流中已渲染的卡片，同步其选中态和次序徽章
+    if (elements.selectedCountBadge) {
+      elements.selectedCountBadge.textContent = `已选 ${count} 项`;
+    }
+    if (elements.batchSelectedCount) {
+      elements.batchSelectedCount.textContent = `已选中 ${count} 张图片`;
+    }
+
+    // 控制底部悬浮操作栏显示与隐藏
+    if (elements.galleryBatchBar) {
+      if (count > 0) {
+        elements.galleryBatchBar.classList.remove("hidden");
+      } else {
+        elements.galleryBatchBar.classList.add("hidden");
+      }
+    }
+
+    // 遍历瀑布流中已渲染的卡片，同步其选中态和次序徽章与勾选圆标
     elements.assetWaterfall.querySelectorAll(".asset-card").forEach((card) => {
       const aid = card.dataset.assetId;
       const idx = selectedArr.indexOf(aid);
-      const cb = card.querySelector(".asset-checkbox");
-      let orderBadge = card.querySelector(".asset-order-badge");
+      const isSel = idx !== -1;
 
-      if (idx !== -1) {
-        card.classList.add("selected");
-        if (cb) cb.checked = true;
+      card.classList.toggle("selected", isSel);
+      card.classList.toggle("is-batch-selected", isSel);
+
+      const cb = card.querySelector(".card-batch-checkbox");
+      if (cb) {
+        cb.classList.toggle("checked", isSel);
+      }
+
+      let orderBadge = card.querySelector(".asset-order-badge");
+      if (isSel) {
         const orderNum = idx + 1;
         if (!orderBadge) {
           orderBadge = document.createElement("span");
@@ -1586,8 +1706,6 @@
         }
         orderBadge.innerHTML = `<span class="badge-num">${orderNum}</span>`;
       } else {
-        card.classList.remove("selected");
-        if (cb) cb.checked = false;
         if (orderBadge) orderBadge.remove();
       }
     });
@@ -1595,7 +1713,185 @@
 
   function clearAllAssetSelection() {
     state.selectedAssetIds.clear();
+    state.lastSelectedAssetId = null;
     updateSelectionBadges();
+  }
+
+  function selectAllVisible() {
+    state.loadedAssets.forEach((item, id) => {
+      state.selectedAssetIds.add(id);
+    });
+    updateSelectionBadges();
+  }
+
+  // ================= 批量操作 API 处理器 =================
+
+  async function handleBatchAction(action, extraPayload = {}) {
+    const assetIds = Array.from(state.selectedAssetIds);
+    if (!assetIds.length) {
+      showNotice("请先选择图片", "info");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/library/batch-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_ids: assetIds,
+          action,
+          ...extraPayload,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showNotice(data.detail || "批量操作失败", "error");
+        return;
+      }
+
+      if (action === "favorite") {
+        assetIds.forEach((aid) => {
+          state.favorites.add(aid);
+          const card = state.cardElements.get(aid);
+          if (card) {
+            const btn = card.querySelector(".asset-star-btn");
+            if (btn) btn.classList.add("starred");
+          }
+        });
+        showNotice(`⭐ 已批量收藏 ${assetIds.length} 张图片`, "success");
+      } else if (action === "unfavorite") {
+        assetIds.forEach((aid) => {
+          state.favorites.delete(aid);
+          const card = state.cardElements.get(aid);
+          if (card) {
+            const btn = card.querySelector(".asset-star-btn");
+            if (btn) btn.classList.remove("starred");
+          }
+        });
+        showNotice(`☆ 已批量取消收藏 ${assetIds.length} 张图片`, "info");
+      } else if (action === "mark_posted") {
+        assetIds.forEach((aid) => {
+          const card = state.cardElements.get(aid);
+          if (card) {
+            let badge = card.querySelector(".asset-usage-badge");
+            if (!badge) {
+              badge = document.createElement("span");
+              badge.className = "asset-usage-badge";
+              badge.textContent = "已投稿";
+              const wrap = card.querySelector(".asset-thumb-wrap");
+              if (wrap) wrap.appendChild(badge);
+            }
+          }
+        });
+        showNotice(`📮 已将 ${assetIds.length} 张图片标记为已投稿`, "success");
+      } else if (action === "unmark_posted") {
+        assetIds.forEach((aid) => {
+          const card = state.cardElements.get(aid);
+          if (card) {
+            const badge = card.querySelector(".asset-usage-badge");
+            if (badge) badge.remove();
+          }
+        });
+        showNotice(`📥 已将 ${assetIds.length} 张图片取消已投稿标记`, "info");
+      } else if (action === "add_tags") {
+        showNotice(`🏷️ 已成功为 ${assetIds.length} 张图片追加标签`, "success");
+        loadFacets();
+      }
+    } catch (err) {
+      console.error("[BatchAction] 批量操作异常:", err);
+      showNotice("批量操作网络异常", "error");
+    }
+  }
+
+  function handleBatchTagging() {
+    const assetIds = Array.from(state.selectedAssetIds);
+    if (!assetIds.length) {
+      showNotice("请先选择图片", "info");
+      return;
+    }
+    const input = prompt(`为选中的 ${assetIds.length} 张图片批量追加标签（多个标签用英文逗号或空格隔开）：`);
+    if (!input || !input.trim()) return;
+    const tags = input
+      .split(/[,，\s]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (tags.length === 0) return;
+    handleBatchAction("add_tags", { tags });
+  }
+
+  function batchCopySelectedPaths() {
+    const assetIds = Array.from(state.selectedAssetIds);
+    if (!assetIds.length) {
+      showNotice("请先选择图片", "info");
+      return;
+    }
+    const paths = [];
+    assetIds.forEach((aid) => {
+      const item = state.loadedAssets.get(aid);
+      if (item && item.path) {
+        paths.push(item.path);
+      }
+    });
+    if (paths.length === 0) {
+      showNotice("未获取到选中图片的物理路径", "warning");
+      return;
+    }
+    navigator.clipboard.writeText(paths.join("\n")).then(() => {
+      showNotice(`📋 已成功复制 ${paths.length} 个文件路径到剪贴板`, "success");
+    }).catch(() => {
+      showNotice("复制到剪贴板失败，请手动复制", "error");
+    });
+  }
+
+  function navigateWaterfallFocus(direction) {
+    const cards = Array.from(elements.assetWaterfall.querySelectorAll(".asset-card:not(.filtered-out)"));
+    if (!cards.length) return;
+    if (!state.focusedAssetId) {
+      setFocusedCard(cards[0].dataset.assetId, true, false);
+      return;
+    }
+    const curIdx = cards.findIndex((c) => c.dataset.assetId === state.focusedAssetId);
+    if (curIdx === -1) {
+      setFocusedCard(cards[0].dataset.assetId, true, false);
+      return;
+    }
+
+    let targetIdx = curIdx;
+    if (direction === "ArrowLeft") {
+      targetIdx = Math.max(0, curIdx - 1);
+    } else if (direction === "ArrowRight") {
+      targetIdx = Math.min(cards.length - 1, curIdx + 1);
+    } else if (direction === "ArrowUp" || direction === "ArrowDown") {
+      const curCard = cards[curIdx];
+      const curRect = curCard.getBoundingClientRect();
+      const curCenterX = curRect.left + curRect.width / 2;
+
+      let candidate = null;
+      let minDistance = Infinity;
+
+      for (let i = 0; i < cards.length; i++) {
+        if (i === curIdx) continue;
+        const r = cards[i].getBoundingClientRect();
+        const isUp = direction === "ArrowUp" && r.bottom < curRect.top + 10;
+        const isDown = direction === "ArrowDown" && r.top > curRect.bottom - 10;
+        if (isUp || isDown) {
+          const centerX = r.left + r.width / 2;
+          const centerY = r.top + r.height / 2;
+          const dist = Math.hypot(centerX - curCenterX, (centerY - (curRect.top + curRect.height / 2)) * 0.5);
+          if (dist < minDistance) {
+            minDistance = dist;
+            candidate = i;
+          }
+        }
+      }
+      if (candidate !== null) {
+        targetIdx = candidate;
+      }
+    }
+
+    if (targetIdx !== curIdx && cards[targetIdx]) {
+      setFocusedCard(cards[targetIdx].dataset.assetId, true, false);
+    }
   }
 
   // ================= Pro Lightbox 大图与图片详情控制器 =================
@@ -5693,17 +5989,95 @@
     });
   }
 
-  // 键盘左右箭头切换大图
+  // 键盘全局快捷键与大图/瀑布流导航
   document.addEventListener("keydown", (e) => {
-    if (!elements.previewDialog.open) return;
-    if (e.key === "ArrowLeft") {
+    // 1. 若在大图弹窗中
+    if (elements.previewDialog && elements.previewDialog.open) {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        navigateLightbox(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        navigateLightbox(1);
+      }
+      return;
+    }
+
+    // 2. 若正在输入框中打字，忽略全局快捷键
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.isContentEditable)) {
+      return;
+    }
+
+    // 3. 瀑布流 Ctrl+A 全选
+    if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
       e.preventDefault();
-      navigateLightbox(-1);
-    } else if (e.key === "ArrowRight") {
+      selectAllVisible();
+      return;
+    }
+
+    // 4. Esc 退出多选 / 取消聚焦
+    if (e.key === "Escape") {
+      if (state.selectedAssetIds.size > 0) {
+        e.preventDefault();
+        clearAllAssetSelection();
+      } else if (state.focusedAssetId) {
+        e.preventDefault();
+        clearCardFocus();
+      }
+      return;
+    }
+
+    // 5. Space 或 Enter 打开当前聚焦卡片的大图
+    if (e.key === " " || e.key === "Enter") {
+      if (state.focusedAssetId) {
+        e.preventDefault();
+        openLightbox(state.focusedAssetId);
+      }
+      return;
+    }
+
+    // 6. 方向键在瀑布流网格中移动焦点
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
-      navigateLightbox(1);
+      navigateWaterfallFocus(e.key);
     }
   });
+
+  // 批量管理模式切换按钮
+  if (elements.btnBatchToggle) {
+    elements.btnBatchToggle.addEventListener("click", () => {
+      toggleBatchMode();
+    });
+  }
+
+  // 底部悬浮批量操作栏动作绑定
+  if (elements.batchBtnFav) {
+    elements.batchBtnFav.addEventListener("click", () => handleBatchAction("favorite"));
+  }
+  if (elements.batchBtnUnfav) {
+    elements.batchBtnUnfav.addEventListener("click", () => handleBatchAction("unfavorite"));
+  }
+  if (elements.batchBtnPost) {
+    elements.batchBtnPost.addEventListener("click", () => handleBatchAction("mark_posted"));
+  }
+  if (elements.batchBtnUnpost) {
+    elements.batchBtnUnpost.addEventListener("click", () => handleBatchAction("unmark_posted"));
+  }
+  if (elements.batchBtnTag) {
+    elements.batchBtnTag.addEventListener("click", () => handleBatchTagging());
+  }
+  if (elements.batchBtnAddSet) {
+    elements.batchBtnAddSet.addEventListener("click", () => {
+      elements.addToSetBtn.click();
+    });
+  }
+  if (elements.batchBtnCopyPaths) {
+    elements.batchBtnCopyPaths.addEventListener("click", () => batchCopySelectedPaths());
+  }
+  if (elements.batchBtnClear) {
+    elements.batchBtnClear.addEventListener("click", () => clearAllAssetSelection());
+  }
 
   // 🖼️ 关联图片维度页签切换
   if (elements.lbRelatedTabs) {

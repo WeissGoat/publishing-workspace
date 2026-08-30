@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260830-06">
+  <link rel="stylesheet" href="/library.css?v=20260830-07">
 </head>
 <body>
   <main class="app-shell">
@@ -195,6 +195,7 @@
                 <option value="name_desc">🔤 文件名 (Z → A)</option>
               </select>
             </div>
+            <button id="btn-batch-toggle" class="secondary-button compact-button" type="button" title="开启/关闭批量多选模式 (Ctrl/Shift点选也可自动触发)">☑ 批量管理</button>
             <span id="selected-count-badge" class="muted">已选 0 项</span>
             <button id="select-all-visible-btn" class="secondary-button compact-button" type="button">全选当前</button>
             <button id="clear-selection-btn" class="text-button" type="button">清选</button>
@@ -487,6 +488,25 @@
       </aside>
     </section>
   </main>
+
+  <!-- 瀑布流多选底部浮动操作栏 -->
+  <div id="gallery-batch-bar" class="gallery-batch-bar hidden">
+    <div class="batch-bar-info">
+      <span class="batch-bar-icon">☑</span>
+      <span id="batch-selected-count" class="batch-selected-count">已选中 0 张图片</span>
+    </div>
+    <div class="batch-bar-divider"></div>
+    <div class="batch-bar-actions">
+      <button id="batch-btn-fav" class="batch-action-btn" type="button" title="批量标星收藏">⭐ 批量收藏</button>
+      <button id="batch-btn-unfav" class="batch-action-btn" type="button" title="批量取消收藏">☆ 取消收藏</button>
+      <button id="batch-btn-post" class="batch-action-btn" type="button" title="批量标记为已投稿">📮 标记已投稿</button>
+      <button id="batch-btn-unpost" class="batch-action-btn" type="button" title="批量取消已投稿">📥 标记未投稿</button>
+      <button id="batch-btn-tag" class="batch-action-btn" type="button" title="批量为选中图片打标签">🏷️ 批量打标签</button>
+      <button id="batch-btn-add-set" class="batch-action-btn" type="button" title="将选中图片批量加入投稿集">📑 加入投稿集</button>
+      <button id="batch-btn-copy-paths" class="batch-action-btn" type="button" title="复制选中文件的完整物理路径">📋 复制路径</button>
+      <button id="batch-btn-clear" class="batch-action-btn btn-close-batch" type="button" title="取消多选 (Esc)">✕ 取消 (Esc)</button>
+    </div>
+  </div>
 
   <!-- 大图与图片详情 Lightbox Modal -->
   <dialog id="preview-dialog" class="preview-dialog">
@@ -843,6 +863,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260830-06" defer></script>
+  <script src="/library.js?v=20260830-07" defer></script>
 </body>
 </html>
