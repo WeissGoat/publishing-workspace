@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS asset_paths (
     last_seen_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_asset_paths_asset ON asset_paths(asset_id);
+CREATE INDEX IF NOT EXISTS idx_asset_paths_path ON asset_paths(path);
 
 CREATE TABLE IF NOT EXISTS asset_nodes (
     asset_id TEXT NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
@@ -92,6 +93,7 @@ CREATE TABLE IF NOT EXISTS import_items (
 );
 CREATE INDEX IF NOT EXISTS idx_import_items_asset ON import_items(asset_id);
 CREATE INDEX IF NOT EXISTS idx_import_items_status ON import_items(import_id, status, source_order);
+CREATE INDEX IF NOT EXISTS idx_import_items_resolved_path ON import_items(resolved_path);
 
 CREATE TABLE IF NOT EXISTS import_problems (
     problem_id TEXT PRIMARY KEY,

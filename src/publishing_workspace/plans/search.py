@@ -292,18 +292,16 @@ class AssetSearchService:
         *,
         catalog: CatalogRepository | None = None,
     ) -> None:
-        """在后端服务启动时预热全局素材检索索引、最新快照索引、使用索引与节点候选。"""
+        """在后端服务启动时轻量预热使用索引与最近活跃快照索引（毫秒级瞬开）。"""
         paths, config = load_workspace(root)
         catalog_inst = catalog or CatalogRepository(paths.catalog, backups_dir=paths.backups)
         # 1. 预热使用索引（秒级构建并缓存）
         self._usage_index(paths, config.image_extensions)
-        # 2. 预热最新的 2 个活跃快照索引，其余快照在全量聚合时按需懒构建
-        for import_id, _ in catalog_inst.import_sources()[:2]:
-            self._get_search_entries(paths, config, import_id, catalog=catalog_inst)
-        # 3. 预热全量聚合缓存（复用上面已缓存的快照 + 懒构建剩余快照），
-        #    确保用户首次点击"全部导入快照"时无需等待
-        self._get_search_entries(paths, config, None, catalog=catalog_inst)
-        # 4. 预热节点候选
+        # 2. 仅预热最新的 1 个活跃快照索引（其余快照在用户切换时按需毫秒级构建并缓存）
+        sources = catalog_inst.import_sources()
+        if sources:
+            self._get_search_entries(paths, config, sources[0][0], catalog=catalog_inst)
+        # 3. 预热节点候选
         for role in NODE_FIELDS:
             NodeSearchService().search(root, role=role, limit=1)
 

@@ -105,18 +105,36 @@ class CatalogRepository:
 
         with self.connection() as connection:
             self._ensure_imports_tags_column(connection)
+            self._ensure_performance_indexes(connection)
             self._align_import_items_with_paths(connection)
 
         _INITIALIZED_CATALOGS.add(resolved_key)
 
+    def _ensure_performance_indexes(self, connection: sqlite3.Connection) -> None:
+        try:
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_asset_paths_path ON asset_paths(path)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_import_items_resolved_path ON import_items(resolved_path)")
+        except Exception:
+            pass
+
     def _align_import_items_with_paths(self, connection: sqlite3.Connection) -> None:
         """自动对齐并自愈 import_items 中的历史 asset_id 与当前物理文件 asset_paths，并补全业务节点。"""
         try:
+            # 仅在存在别名映射记录时执行轻量对齐，避免全表扫描
+            has_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_aliases'"
+            ).fetchone()
+            if not has_table:
+                return
+            has_records = connection.execute("SELECT 1 FROM asset_aliases LIMIT 1").fetchone()
+            if not has_records:
+                return
+
+            # 基于 asset_aliases 索引快速对齐 import_items
             connection.execute(
                 "UPDATE import_items "
-                "SET asset_id = (SELECT ap.asset_id FROM asset_paths ap WHERE ap.path = import_items.resolved_path) "
-                "WHERE resolved_path IN (SELECT path FROM asset_paths WHERE available=1) "
-                "  AND (asset_id IS NULL OR asset_id != (SELECT ap.asset_id FROM asset_paths ap WHERE ap.path = import_items.resolved_path))"
+                "SET asset_id = (SELECT al.new_asset_id FROM asset_aliases al WHERE al.old_asset_id = import_items.asset_id) "
+                "WHERE asset_id IN (SELECT old_asset_id FROM asset_aliases)"
             )
             # 补全重绘资产继承的历史业务节点（角色、动作组等）
             connection.execute(
@@ -910,6 +928,17 @@ class CatalogRepository:
                 "path=excluded.path, created_at=excluded.created_at",
                 (old_asset_id, new_asset_id, path, now),
             )
+            # 若新资产已入库，同步按 ID 更新 import_items 与 asset_nodes
+            if connection.execute("SELECT 1 FROM assets WHERE asset_id=?", (new_asset_id,)).fetchone():
+                connection.execute(
+                    "UPDATE import_items SET asset_id=? WHERE asset_id=?",
+                    (new_asset_id, old_asset_id),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO asset_nodes (asset_id, role, node_index, node_id, ref) "
+                    "SELECT ?, role, node_index, node_id, ref FROM asset_nodes WHERE asset_id=?",
+                    (new_asset_id, old_asset_id),
+                )
 
     def resolve_asset_id(self, asset_id: str) -> str:
         """解析资产别名，若存在重命名/重绘映射链则返回最新生效的 asset_id。"""
