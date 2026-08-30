@@ -282,6 +282,11 @@
     lightboxInpaintArea: document.getElementById("lightbox-inpaint-area"),
     lightboxInpaintSidebar: document.getElementById("lightbox-inpaint-sidebar"),
     lightboxViewSidebar: document.getElementById("lightbox-view-sidebar"),
+    inpaintTabMask: document.getElementById("inpaint-tab-mask"),
+    inpaintTabCompare: document.getElementById("inpaint-tab-compare"),
+    inpaintViewModeTabs: document.getElementById("inpaint-view-mode-tabs"),
+    inpaintMaskTools: document.getElementById("inpaint-mask-tools"),
+    inpaintCompareTools: document.getElementById("inpaint-compare-tools"),
     inpaintCanvasWrap: document.getElementById("inpaint-canvas-wrap"),
     inpaintCanvasBg: document.getElementById("inpaint-canvas-bg"),
     inpaintCanvasMask: document.getElementById("inpaint-canvas-mask"),
@@ -292,6 +297,8 @@
     inpaintRedoBtn: document.getElementById("inpaint-redo-btn"),
     inpaintClearBtn: document.getElementById("inpaint-clear-btn"),
     inpaintToggleDiffBtn: document.getElementById("inpaint-toggle-diff-btn"),
+    inpaintResetSliderBtn: document.getElementById("inpaint-reset-slider-btn"),
+    inpaintSwitchToMaskBtn: document.getElementById("inpaint-switch-to-mask-btn"),
     inpaintCompareWrap: document.getElementById("inpaint-compare-wrap"),
     inpaintCompareInner: document.getElementById("inpaint-compare-inner"),
     inpaintCompareBefore: document.getElementById("inpaint-compare-before"),
@@ -4165,11 +4172,39 @@
 
     batches: [], // 多轮批次列表 [{ batchId, roundNumber, sessionId, strength, prompt, timestamp, collapsed, candidates: [...] }]
     activeCandidate: null, // 当前选中的候选图对象
+    viewMode: "mask", // 当前左侧展示模式："mask" (涂抹画布) | "compare" (对比滑块)
     count: 2,
     strength: 0.70,
     sliderPos: 50,
     isDraggingSlider: false,
   };
+
+  /** 切换左侧视图模式：mask (涂抹遮罩) ↔ compare (效果对比) */
+  function setInpaintViewMode(mode) {
+    inpaintEditor.viewMode = mode;
+
+    if (elements.inpaintTabMask) elements.inpaintTabMask.classList.toggle("active", mode === "mask");
+    if (elements.inpaintTabCompare) elements.inpaintTabCompare.classList.toggle("active", mode === "compare");
+
+    if (mode === "mask") {
+      if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.add("hidden");
+      if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.remove("hidden");
+      if (elements.inpaintMaskTools) elements.inpaintMaskTools.classList.remove("hidden");
+      if (elements.inpaintCompareTools) elements.inpaintCompareTools.classList.add("hidden");
+      requestAnimationFrame(() => {
+        fitInpaintCanvasToWrap();
+      });
+    } else if (mode === "compare") {
+      if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.add("hidden");
+      if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.remove("hidden");
+      if (elements.inpaintMaskTools) elements.inpaintMaskTools.classList.add("hidden");
+      if (elements.inpaintCompareTools) elements.inpaintCompareTools.classList.remove("hidden");
+      if (elements.inpaintTabCompare) elements.inpaintTabCompare.classList.remove("hidden");
+      requestAnimationFrame(() => {
+        fitInpaintCompareToWrap();
+      });
+    }
+  }
 
   /** 初始化 Inpaint 编辑器 DOM 与事件绑定 */
   function initInpaintEditor() {
@@ -4225,6 +4260,27 @@
     if (elements.inpaintRedoBtn) elements.inpaintRedoBtn.addEventListener("click", inpaintRedo);
     if (elements.inpaintClearBtn) elements.inpaintClearBtn.addEventListener("click", inpaintClearMask);
 
+    // 视图模式切换（调整遮罩 ↔ 效果对比）
+    if (elements.inpaintViewModeTabs) {
+      elements.inpaintViewModeTabs.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-inpaint-mode]");
+        if (!btn) return;
+        setInpaintViewMode(btn.dataset.inpaintMode);
+      });
+    }
+
+    // 对比模式下的快捷操作按钮
+    if (elements.inpaintSwitchToMaskBtn) {
+      elements.inpaintSwitchToMaskBtn.addEventListener("click", () => {
+        setInpaintViewMode("mask");
+      });
+    }
+    if (elements.inpaintResetSliderBtn) {
+      elements.inpaintResetSliderBtn.addEventListener("click", () => {
+        updateSplitSlider(50);
+      });
+    }
+
     // 核心按钮
     if (elements.inpaintGenerateBtn) elements.inpaintGenerateBtn.addEventListener("click", handleInpaintGenerate);
     if (elements.inpaintApplyBtn) elements.inpaintApplyBtn.addEventListener("click", handleInpaintApply);
@@ -4258,8 +4314,11 @@
     // 窗口尺寸变化自适应
     window.addEventListener("resize", () => {
       if (state.lightbox.mode === "inpaint") {
-        fitInpaintCanvasToWrap();
-        fitInpaintCompareToWrap();
+        if (inpaintEditor.viewMode === "mask") {
+          fitInpaintCanvasToWrap();
+        } else {
+          fitInpaintCompareToWrap();
+        }
       }
     });
   }
@@ -4269,8 +4328,11 @@
     if (!forceReload && inpaintEditor.currentAssetId === assetId && inpaintEditor.loaded) {
       // 相同素材切回重绘 Tab 时，完整保留已有 Mask、候选批次流、提示词输入，仅自适应重绘尺寸
       requestAnimationFrame(() => {
-        fitInpaintCanvasToWrap();
-        fitInpaintCompareToWrap();
+        if (inpaintEditor.viewMode === "mask") {
+          fitInpaintCanvasToWrap();
+        } else {
+          fitInpaintCompareToWrap();
+        }
       });
       return;
     }
@@ -4283,13 +4345,14 @@
     inpaintEditor.activeCandidate = null;
     updateInpaintUndoRedoButtons();
 
-    // 重置对比视口与结果区
-    if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.add("hidden");
-    if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.remove("hidden");
+    // 重置并默认进入 mask 遮罩编辑模式
+    setInpaintViewMode("mask");
+    if (elements.inpaintTabCompare) elements.inpaintTabCompare.classList.add("hidden");
+
+    // 重置结果区
     if (elements.inpaintResultsSection) elements.inpaintResultsSection.classList.add("hidden");
     if (elements.inpaintStickyFooter) elements.inpaintStickyFooter.classList.add("hidden");
     if (elements.inpaintProgressBox) elements.inpaintProgressBox.classList.add("hidden");
-    if (elements.inpaintToggleDiffBtn) elements.inpaintToggleDiffBtn.classList.add("hidden");
 
     // 自动预填原图 Prompt 与 Negative Prompt
     const detail = state.lightbox.currentAssetDetails || {};
@@ -4822,11 +4885,8 @@
 
     const assetId = state.lightbox.activeAssetId;
 
-    if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.add("hidden");
-    if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.remove("hidden");
-    if (elements.inpaintToggleDiffBtn) elements.inpaintToggleDiffBtn.classList.remove("hidden");
-
-    fitInpaintCompareToWrap();
+    // 切换至对比模式
+    setInpaintViewMode("compare");
 
     if (elements.inpaintCompareBefore) {
       elements.inpaintCompareBefore.src = `/api/assets/${encodeURIComponent(assetId)}/preview?v=${Date.now()}`;
@@ -5014,11 +5074,11 @@
     inpaintEditor.activeCandidate = null;
     inpaintClearMask();
 
+    setInpaintViewMode("mask");
+    if (elements.inpaintTabCompare) elements.inpaintTabCompare.classList.add("hidden");
     if (elements.inpaintResultsSection) elements.inpaintResultsSection.classList.add("hidden");
     if (elements.inpaintStickyFooter) elements.inpaintStickyFooter.classList.add("hidden");
     if (elements.inpaintProgressBox) elements.inpaintProgressBox.classList.add("hidden");
-    if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.add("hidden");
-    if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.remove("hidden");
     if (elements.inpaintToggleDiffBtn) elements.inpaintToggleDiffBtn.classList.add("hidden");
 
     showNotice("已放弃全部重绘修改，原图保持不变", "info");

@@ -566,13 +566,28 @@
         <!-- ✨ AI 局部重绘 (Inpaint) 工作台 -->
         <div id="lightbox-inpaint-area" class="lightbox-inpaint-area hidden">
           <div class="inpaint-toolbar">
-            <label class="inpaint-control">🖌️ 画笔粗细 <input type="range" id="inpaint-brush-size" min="10" max="120" value="36"> <span id="inpaint-brush-size-val">36</span></label>
+            <!-- 视图模式切换：涂抹遮罩 ↔ 效果对比 -->
+            <div id="inpaint-view-mode-tabs" class="segmented-control inpaint-mode-toggle">
+              <button type="button" class="segment-btn active" data-inpaint-mode="mask" id="inpaint-tab-mask" title="涂抹或调整重绘区域">🖌️ 调整遮罩</button>
+              <button type="button" class="segment-btn hidden" data-inpaint-mode="compare" id="inpaint-tab-compare" title="滑动对比生成效果">🔀 效果对比</button>
+            </div>
             <span class="inpaint-sep"></span>
-            <button type="button" id="inpaint-undo-btn" class="inpaint-btn" disabled title="撤销 (Ctrl+Z)">↶ 撤销</button>
-            <button type="button" id="inpaint-redo-btn" class="inpaint-btn" disabled title="重做 (Ctrl+Y)">↷ 重做</button>
-            <button type="button" id="inpaint-clear-btn" class="inpaint-btn" title="清空所有涂抹遮罩">🗑️ 清空遮罩</button>
-            <span class="inpaint-sep"></span>
-            <button type="button" id="inpaint-toggle-diff-btn" class="inpaint-btn inpaint-btn-highlight hidden" title="按住可临时查看原图">👁️ 按住看原图</button>
+
+            <!-- 遮罩编辑工具组 -->
+            <div id="inpaint-mask-tools" class="inpaint-tools-group">
+              <label class="inpaint-control">🖌️ 画笔粗细 <input type="range" id="inpaint-brush-size" min="10" max="150" value="36"> <span id="inpaint-brush-size-val">36</span></label>
+              <span class="inpaint-sep"></span>
+              <button type="button" id="inpaint-undo-btn" class="inpaint-btn" disabled title="撤销 (Ctrl+Z)">↶ 撤销</button>
+              <button type="button" id="inpaint-redo-btn" class="inpaint-btn" disabled title="重做 (Ctrl+Y)">↷ 重做</button>
+              <button type="button" id="inpaint-clear-btn" class="inpaint-btn" title="清空所有涂抹遮罩">🗑️ 清空遮罩</button>
+            </div>
+
+            <!-- 对比操作工具组 -->
+            <div id="inpaint-compare-tools" class="inpaint-tools-group hidden">
+              <button type="button" id="inpaint-toggle-diff-btn" class="inpaint-btn inpaint-btn-highlight" title="按住可临时查看原图">👁️ 按住看原图</button>
+              <button type="button" id="inpaint-reset-slider-btn" class="inpaint-btn" title="将对比分割线恢复居中 50%">🌓 居中对比</button>
+              <button type="button" id="inpaint-switch-to-mask-btn" class="inpaint-btn inpaint-btn-primary" title="切回原图修改遮罩并重新生成">✏️ 修改遮罩</button>
+            </div>
           </div>
           <!-- 遮罩绘制画布视口 -->
           <div id="inpaint-canvas-wrap" class="inpaint-canvas-wrap">
