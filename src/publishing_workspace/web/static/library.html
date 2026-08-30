@@ -593,73 +593,79 @@
         <aside class="lightbox-sidebar">
           <!-- Inpaint 专用精简控制侧栏 -->
           <div id="lightbox-inpaint-sidebar" class="lightbox-inpaint-sidebar hidden">
-            <div class="inpaint-panel-card">
-              <h4 class="inpaint-panel-title">✨ AI 局部重绘设置</h4>
-              <p class="helper-text inpaint-hint">在左侧画布上涂抹要重绘的区域，其他区域与生成参数（模型、步数、CFG、采样器等）将 100% 保持与原图一致。</p>
-              
-              <div class="inpaint-field-group">
-                <label class="inpaint-field-label" for="inpaint-prompt-input">📝 正向提示词 (Prompt)</label>
-                <textarea id="inpaint-prompt-input" class="inpaint-textarea" rows="4" placeholder="自动继承原图提示词，可在此追加或修改..."></textarea>
+            <div class="inpaint-sidebar-body">
+              <div class="inpaint-panel-card">
+                <h4 class="inpaint-panel-title">✨ AI 局部重绘设置</h4>
+                <p class="helper-text inpaint-hint">在左侧画布上涂抹要重绘的区域，其他区域与生成参数（模型、步数、CFG、采样器等）将 100% 保持与原图一致。</p>
+                
+                <div class="inpaint-field-group">
+                  <label class="inpaint-field-label" for="inpaint-prompt-input">📝 正向提示词 (Prompt)</label>
+                  <textarea id="inpaint-prompt-input" class="inpaint-textarea" rows="3" placeholder="自动继承原图提示词，可在此追加或修改..."></textarea>
+                </div>
+
+                <div class="inpaint-field-group">
+                  <label class="inpaint-field-label" for="inpaint-neg-prompt-input">🚫 负向提示词 (Negative)</label>
+                  <textarea id="inpaint-neg-prompt-input" class="inpaint-textarea" rows="2" placeholder="自动继承原图负向提示词..."></textarea>
+                </div>
+
+                <div class="inpaint-field-group">
+                  <div class="inpaint-slider-row">
+                    <label class="inpaint-field-label" for="inpaint-strength-slider">🎚️ 重绘去噪强度 (Strength)</label>
+                    <span id="inpaint-strength-val" class="inpaint-val-badge">0.70</span>
+                  </div>
+                  <input type="range" id="inpaint-strength-slider" min="0.10" max="1.00" step="0.05" value="0.70" class="inpaint-slider">
+                  <div class="slider-ticks"><span>微调 0.1</span><span>适中 0.7</span><span>大幅 1.0</span></div>
+                </div>
+
+                <div class="inpaint-field-group">
+                  <label class="inpaint-field-label">🔢 生成张数</label>
+                  <div id="inpaint-count-group" class="inpaint-count-group">
+                    <button type="button" class="inpaint-count-btn" data-count="1">1 张</button>
+                    <button type="button" class="inpaint-count-btn active" data-count="2">2 张 (推荐)</button>
+                    <button type="button" class="inpaint-count-btn" data-count="4">4 张</button>
+                  </div>
+                </div>
+
+                <button type="button" id="inpaint-generate-btn" class="inpaint-action-btn inpaint-generate-btn">
+                  <span class="btn-spinner hidden" id="inpaint-spinner"></span>
+                  <span id="inpaint-generate-btn-text">🚀 开始局部重绘</span>
+                </button>
+
+                <!-- 局部重绘生成进度与状态提示 -->
+                <div id="inpaint-progress-box" class="inpaint-progress-box hidden">
+                  <div class="inpaint-progress-header">
+                    <span class="inpaint-progress-spinner"></span>
+                    <span id="inpaint-progress-text" class="inpaint-progress-text">正在重绘第 1 / 2 张...</span>
+                  </div>
+                  <div class="inpaint-progress-track">
+                    <div id="inpaint-progress-fill" class="inpaint-progress-fill"></div>
+                  </div>
+                  <div id="inpaint-progress-hint" class="inpaint-progress-hint">单张按序生成中，若遇 429 限流将自动智能重试</div>
+                </div>
               </div>
 
-              <div class="inpaint-field-group">
-                <label class="inpaint-field-label" for="inpaint-neg-prompt-input">🚫 负向提示词 (Negative)</label>
-                <textarea id="inpaint-neg-prompt-input" class="inpaint-textarea" rows="3" placeholder="自动继承原图负向提示词..."></textarea>
-              </div>
-
-              <div class="inpaint-field-group">
-                <div class="inpaint-slider-row">
-                  <label class="inpaint-field-label" for="inpaint-strength-slider">🎚️ 重绘去噪强度 (Strength)</label>
-                  <span id="inpaint-strength-val" class="inpaint-val-badge">0.70</span>
+              <!-- 候选图片结果列表与多轮历史批次容器 -->
+              <div id="inpaint-results-section" class="inpaint-results-section hidden">
+                <div class="inpaint-section-header">
+                  <div class="inpaint-section-title-wrap">
+                    <h4 class="inpaint-panel-title">🖼️ 候选重绘结果 (<span id="inpaint-candidates-count">0</span>)</h4>
+                    <span class="inpaint-batch-meta-count" id="inpaint-batch-count-badge">共 1 轮</span>
+                  </div>
+                  <span class="helper-text">点击卡片对比</span>
                 </div>
-                <input type="range" id="inpaint-strength-slider" min="0.10" max="1.00" step="0.05" value="0.70" class="inpaint-slider">
-                <div class="slider-ticks"><span>微调 0.1</span><span>适中 0.7</span><span>大幅 1.0</span></div>
-              </div>
-
-              <div class="inpaint-field-group">
-                <label class="inpaint-field-label">🔢 生成张数</label>
-                <div id="inpaint-count-group" class="inpaint-count-group">
-                  <button type="button" class="inpaint-count-btn" data-count="1">1 张</button>
-                  <button type="button" class="inpaint-count-btn active" data-count="2">2 张 (推荐)</button>
-                  <button type="button" class="inpaint-count-btn" data-count="4">4 张</button>
-                </div>
-              </div>
-
-              <button type="button" id="inpaint-generate-btn" class="inpaint-action-btn inpaint-generate-btn">
-                <span class="btn-spinner hidden" id="inpaint-spinner"></span>
-                <span id="inpaint-generate-btn-text">🚀 开始局部重绘</span>
-              </button>
-
-              <!-- 局部重绘生成进度与状态提示 -->
-              <div id="inpaint-progress-box" class="inpaint-progress-box hidden">
-                <div class="inpaint-progress-header">
-                  <span class="inpaint-progress-spinner"></span>
-                  <span id="inpaint-progress-text" class="inpaint-progress-text">正在重绘第 1 / 2 张...</span>
-                </div>
-                <div class="inpaint-progress-track">
-                  <div id="inpaint-progress-fill" class="inpaint-progress-fill"></div>
-                </div>
-                <div id="inpaint-progress-hint" class="inpaint-progress-hint">单张按序生成中，若遇 429 限流将自动智能重试</div>
+                
+                <div id="inpaint-batches-container" class="inpaint-batches-container"></div>
               </div>
             </div>
 
-            <!-- 候选图片结果列表与覆盖操作区 -->
-            <div id="inpaint-results-section" class="inpaint-results-section hidden">
-              <div class="inpaint-section-header">
-                <h4 class="inpaint-panel-title">🖼️ 候选重绘结果 (<span id="inpaint-candidates-count">0</span>)</h4>
-                <span class="helper-text">点击候选卡片进行对比</span>
-              </div>
-              
-              <div id="inpaint-candidates-grid" class="inpaint-candidates-grid"></div>
-
-              <div class="inpaint-apply-actions">
-                <button type="button" id="inpaint-apply-btn" class="inpaint-action-btn inpaint-apply-btn">
-                  ✅ 确认采用并覆盖原图
-                </button>
-                <button type="button" id="inpaint-discard-btn" class="inpaint-action-btn inpaint-discard-btn">
-                  ❌ 放弃本次重绘
-                </button>
-              </div>
+            <!-- 吸底常驻操作栏 -->
+            <div id="inpaint-sticky-footer" class="inpaint-sidebar-sticky-footer hidden">
+              <button type="button" id="inpaint-apply-btn" class="inpaint-action-btn inpaint-apply-btn">
+                ✅ 确认采用选中的图片覆盖原图
+              </button>
+              <button type="button" id="inpaint-discard-btn" class="inpaint-action-btn inpaint-discard-btn">
+                ❌ 放弃全部重绘修改
+              </button>
             </div>
           </div>
 

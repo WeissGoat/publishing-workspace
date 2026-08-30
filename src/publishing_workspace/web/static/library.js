@@ -312,7 +312,9 @@
     inpaintProgressHint: document.getElementById("inpaint-progress-hint"),
     inpaintResultsSection: document.getElementById("inpaint-results-section"),
     inpaintCandidatesCount: document.getElementById("inpaint-candidates-count"),
-    inpaintCandidatesGrid: document.getElementById("inpaint-candidates-grid"),
+    inpaintBatchCountBadge: document.getElementById("inpaint-batch-count-badge"),
+    inpaintBatchesContainer: document.getElementById("inpaint-batches-container"),
+    inpaintStickyFooter: document.getElementById("inpaint-sticky-footer"),
     inpaintApplyBtn: document.getElementById("inpaint-apply-btn"),
     inpaintDiscardBtn: document.getElementById("inpaint-discard-btn"),
     lightboxPrevBtn: document.getElementById("lightbox-prev-btn"),
@@ -3982,9 +3984,8 @@
     imgW: 0,
     imgH: 0,
 
-    sessionId: null,
-    candidates: [],
-    activeCandidateIndex: 0,
+    batches: [], // 多轮批次列表 [{ batchId, roundNumber, sessionId, strength, prompt, timestamp, collapsed, candidates: [...] }]
+    activeCandidate: null, // 当前选中的候选图对象
     count: 2,
     strength: 0.70,
     sliderPos: 50,
@@ -4087,7 +4088,7 @@
   /** 加载指定资产到 Inpaint 画布 */
   function loadAssetToInpaint(assetId, forceReload = false) {
     if (!forceReload && inpaintEditor.currentAssetId === assetId && inpaintEditor.loaded) {
-      // 相同素材切回重绘 Tab 时，完整保留已有 Mask、候选结果、提示词输入，仅自适应重绘尺寸
+      // 相同素材切回重绘 Tab 时，完整保留已有 Mask、候选批次流、提示词输入，仅自适应重绘尺寸
       requestAnimationFrame(() => {
         fitInpaintCanvasToWrap();
         fitInpaintCompareToWrap();
@@ -4099,15 +4100,15 @@
     inpaintEditor.loaded = false;
     inpaintEditor.undoStack = [];
     inpaintEditor.redoStack = [];
-    inpaintEditor.sessionId = null;
-    inpaintEditor.candidates = [];
-    inpaintEditor.activeCandidateIndex = 0;
+    inpaintEditor.batches = [];
+    inpaintEditor.activeCandidate = null;
     updateInpaintUndoRedoButtons();
 
     // 重置对比视口与结果区
     if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.add("hidden");
     if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.remove("hidden");
     if (elements.inpaintResultsSection) elements.inpaintResultsSection.classList.add("hidden");
+    if (elements.inpaintStickyFooter) elements.inpaintStickyFooter.classList.add("hidden");
     if (elements.inpaintProgressBox) elements.inpaintProgressBox.classList.add("hidden");
     if (elements.inpaintToggleDiffBtn) elements.inpaintToggleDiffBtn.classList.add("hidden");
 
@@ -4432,15 +4433,42 @@
       }
 
       const result = await res.json();
-      inpaintEditor.sessionId = result.session_id;
-      inpaintEditor.candidates = result.candidates || [];
+      const rawCandidates = result.candidates || [];
+
+      // 构造新一轮批次数据
+      const roundNum = inpaintEditor.batches.length + 1;
+      const batchId = `batch_${Date.now()}_${roundNum}`;
+      const newBatch = {
+        batchId: batchId,
+        roundNumber: roundNum,
+        sessionId: result.session_id,
+        strength: strength,
+        prompt: prompt,
+        negativePrompt: negativePrompt,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        collapsed: false,
+        candidates: rawCandidates.map((c, idx) => ({
+          ...c,
+          batchId: batchId,
+          sessionId: result.session_id,
+          roundNumber: roundNum,
+          indexInRound: idx + 1,
+          starred: false,
+          deleted: false,
+        })),
+      };
+
+      // 自动收起以往历史各轮
+      inpaintEditor.batches.forEach((b) => { b.collapsed = true; });
+      // 将最新一轮插入最前
+      inpaintEditor.batches.unshift(newBatch);
 
       // 进度条满格并提示成功
       if (progressTimer) clearInterval(progressTimer);
       if (elements.inpaintProgressFill) elements.inpaintProgressFill.style.width = "100%";
-      if (elements.inpaintProgressText) elements.inpaintProgressText.textContent = `✅ 全部 ${inpaintEditor.candidates.length} 张候选图生成完毕！`;
+      if (elements.inpaintProgressText) elements.inpaintProgressText.textContent = `✅ 全部 ${rawCandidates.length} 张候选图生成完毕！`;
 
-      showNotice(`✅ 成功生成 ${inpaintEditor.candidates.length} 张候选图片！请在右侧选择并滑动对比`, "success");
+      showNotice(`✅ 成功生成第 ${roundNum} 轮 (${rawCandidates.length} 张)！请在右侧选择并滑动对比`, "success");
 
       // 延迟收起进度条并展示候选结果
       setTimeout(() => {
@@ -4449,8 +4477,8 @@
 
       // 渲染候选列表并开启 Split Slider 对比模式
       renderInpaintCandidates();
-      if (inpaintEditor.candidates.length > 0) {
-        setupInpaintCompareView(0);
+      if (newBatch.candidates.length > 0) {
+        setupInpaintCompareView(newBatch.candidates[0]);
       }
     } catch (err) {
       if (progressTimer) clearInterval(progressTimer);
@@ -4463,44 +4491,156 @@
     }
   }
 
-  /** 渲染生成的候选图片列表 */
+  /** 渲染生成的候选图片列表（支持多轮折叠流与标记剔除） */
   function renderInpaintCandidates() {
-    if (!elements.inpaintCandidatesGrid || !elements.inpaintResultsSection) return;
-    elements.inpaintResultsSection.classList.remove("hidden");
-    if (elements.inpaintCandidatesCount) {
-      elements.inpaintCandidatesCount.textContent = inpaintEditor.candidates.length;
+    if (!elements.inpaintBatchesContainer || !elements.inpaintResultsSection) return;
+
+    let totalActiveCandidates = 0;
+    inpaintEditor.batches.forEach((b) => {
+      totalActiveCandidates += b.candidates.filter((c) => !c.deleted).length;
+    });
+
+    if (totalActiveCandidates === 0) {
+      elements.inpaintResultsSection.classList.add("hidden");
+      if (elements.inpaintStickyFooter) elements.inpaintStickyFooter.classList.add("hidden");
+      return;
     }
 
-    elements.inpaintCandidatesGrid.innerHTML = "";
-    inpaintEditor.candidates.forEach((cand, idx) => {
-      const card = document.createElement("div");
-      card.className = `inpaint-candidate-card ${idx === inpaintEditor.activeCandidateIndex ? "active" : ""}`;
-      card.innerHTML = `
-        <img src="${cand.preview_url}" alt="候选图 #${idx + 1}" loading="lazy">
-        <div class="inpaint-candidate-meta">
-          <span>#${idx + 1}</span>
-          <span style="font-size: 9px;">Seed: ${cand.seed}</span>
+    elements.inpaintResultsSection.classList.remove("hidden");
+    if (elements.inpaintStickyFooter) elements.inpaintStickyFooter.classList.remove("hidden");
+
+    if (elements.inpaintCandidatesCount) {
+      elements.inpaintCandidatesCount.textContent = totalActiveCandidates;
+    }
+    if (elements.inpaintBatchCountBadge) {
+      elements.inpaintBatchCountBadge.textContent = `共 ${inpaintEditor.batches.length} 轮`;
+    }
+
+    elements.inpaintBatchesContainer.innerHTML = "";
+
+    inpaintEditor.batches.forEach((batch, bIdx) => {
+      const activeInBatch = batch.candidates.filter((c) => !c.deleted);
+      if (activeInBatch.length === 0) return;
+
+      const isLatest = bIdx === 0;
+      const batchCard = document.createElement("div");
+      batchCard.className = `inpaint-batch-card ${isLatest ? "is-latest" : ""}`;
+
+      const roundTitle = isLatest
+        ? `🎯 第 ${batch.roundNumber} 轮 (最新)`
+        : `🕒 第 ${batch.roundNumber} 轮`;
+
+      // 批次头部
+      const header = document.createElement("div");
+      header.className = "inpaint-batch-header";
+      header.innerHTML = `
+        <div class="inpaint-batch-title-group">
+          <span class="inpaint-batch-title">${roundTitle}</span>
+          <span class="inpaint-batch-info-tag">强度: ${batch.strength.toFixed(2)}</span>
+          <span class="inpaint-batch-info-tag">${activeInBatch.length} 张</span>
+          <span class="inpaint-batch-info-tag" style="font-size: 9px;">${batch.timestamp}</span>
         </div>
+        <span class="inpaint-batch-toggle-btn">${batch.collapsed ? "▶ 展开" : "▼ 收起"}</span>
       `;
-      card.addEventListener("click", () => {
-        setupInpaintCompareView(idx);
+      header.addEventListener("click", () => {
+        batch.collapsed = !batch.collapsed;
+        renderInpaintCandidates();
       });
-      elements.inpaintCandidatesGrid.appendChild(card);
+      batchCard.appendChild(header);
+
+      if (batch.collapsed) {
+        // 折叠状态：显示小缩略图摘要条
+        const summary = document.createElement("div");
+        summary.className = "inpaint-batch-summary";
+        activeInBatch.forEach((cand) => {
+          const isActive = inpaintEditor.activeCandidate && inpaintEditor.activeCandidate.batchId === cand.batchId && inpaintEditor.activeCandidate.candidate_id === cand.candidate_id;
+          const thumb = document.createElement("img");
+          thumb.className = `inpaint-mini-thumb ${isActive ? "active" : ""}`;
+          thumb.src = cand.preview_url;
+          thumb.alt = `第 ${cand.roundNumber} 轮 #${cand.indexInRound}`;
+          thumb.title = `第 ${cand.roundNumber} 轮 #${cand.indexInRound} (Seed: ${cand.seed}) - 点击对比`;
+          thumb.addEventListener("click", (e) => {
+            e.stopPropagation();
+            setupInpaintCompareView(cand);
+          });
+          summary.appendChild(thumb);
+        });
+        batchCard.appendChild(summary);
+      } else {
+        // 展开状态：显示完整 2 列大卡片网格
+        const grid = document.createElement("div");
+        grid.className = "inpaint-candidates-grid";
+        activeInBatch.forEach((cand) => {
+          const isActive = inpaintEditor.activeCandidate && inpaintEditor.activeCandidate.batchId === cand.batchId && inpaintEditor.activeCandidate.candidate_id === cand.candidate_id;
+          const card = document.createElement("div");
+          card.className = `inpaint-candidate-card ${isActive ? "active" : ""}`;
+          card.innerHTML = `
+            <div class="inpaint-card-img-wrap">
+              <img src="${cand.preview_url}" alt="候选图 #${cand.indexInRound}" loading="lazy">
+              <span class="inpaint-card-badge">#${cand.indexInRound}</span>
+              <div class="inpaint-card-actions ${cand.starred ? "has-active" : ""}">
+                <button type="button" class="inpaint-card-star-btn ${cand.starred ? "is-starred" : ""}" title="${cand.starred ? "取消标记" : "标记为心仪候选"}">⭐</button>
+                <button type="button" class="inpaint-card-del-btn" title="剔除此废片">✕</button>
+              </div>
+            </div>
+            <div class="inpaint-candidate-meta">
+              <span style="font-weight: 600;">第 ${cand.roundNumber} 轮 #${cand.indexInRound}</span>
+              <span style="font-size: 9px;">Seed: ${cand.seed}</span>
+            </div>
+          `;
+
+          // 收藏按钮
+          const starBtn = card.querySelector(".inpaint-card-star-btn");
+          starBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            cand.starred = !cand.starred;
+            renderInpaintCandidates();
+          });
+
+          // 剔除按钮
+          const delBtn = card.querySelector(".inpaint-card-del-btn");
+          delBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            cand.deleted = true;
+            if (inpaintEditor.activeCandidate && inpaintEditor.activeCandidate.batchId === cand.batchId && inpaintEditor.activeCandidate.candidate_id === cand.candidate_id) {
+              let nextActive = null;
+              for (const b of inpaintEditor.batches) {
+                const available = b.candidates.filter((c) => !c.deleted);
+                if (available.length > 0) {
+                  nextActive = available[0];
+                  break;
+                }
+              }
+              if (nextActive) {
+                setupInpaintCompareView(nextActive);
+              } else {
+                inpaintEditor.activeCandidate = null;
+                if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.add("hidden");
+                if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.remove("hidden");
+              }
+            }
+            renderInpaintCandidates();
+          });
+
+          // 点击卡片进入对比
+          card.addEventListener("click", () => {
+            setupInpaintCompareView(cand);
+          });
+
+          grid.appendChild(card);
+        });
+        batchCard.appendChild(grid);
+      }
+
+      elements.inpaintBatchesContainer.appendChild(batchCard);
     });
   }
 
   /** 设置 Split Slider 对比视图 */
-  function setupInpaintCompareView(index) {
-    if (!inpaintEditor.candidates[index]) return;
-    inpaintEditor.activeCandidateIndex = index;
+  function setupInpaintCompareView(cand) {
+    if (!cand) return;
+    inpaintEditor.activeCandidate = cand;
 
-    // 选中卡片样式高亮
-    if (elements.inpaintCandidatesGrid) {
-      const cards = elements.inpaintCandidatesGrid.querySelectorAll(".inpaint-candidate-card");
-      cards.forEach((c, i) => c.classList.toggle("active", i === index));
-    }
-
-    const cand = inpaintEditor.candidates[index];
     const assetId = state.lightbox.activeAssetId;
 
     if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.add("hidden");
@@ -4515,6 +4655,14 @@
     if (elements.inpaintCompareAfter) {
       elements.inpaintCompareAfter.src = cand.preview_url;
     }
+
+    // 更新吸底确认按钮文案
+    if (elements.inpaintApplyBtn) {
+      elements.inpaintApplyBtn.textContent = `✅ 确认采用选中的图片 (第 ${cand.roundNumber} 轮 #${cand.indexInRound}) 覆盖原图`;
+    }
+
+    // 重新刷新批次视图中 active 高亮
+    renderInpaintCandidates();
 
     // 重置滑块位置到 50%
     updateSplitSlider(50);
@@ -4563,20 +4711,19 @@
   }
 
   /** 确认采用选中的候选图片并覆盖原图 */
-  /** 确认采用选中的候选图片并覆盖原图 */
   async function handleInpaintApply() {
     const oldAssetId = state.lightbox.activeAssetId;
-    const cand = inpaintEditor.candidates[inpaintEditor.activeCandidateIndex];
-    if (!oldAssetId || !cand || !inpaintEditor.sessionId) return;
+    const cand = inpaintEditor.activeCandidate;
+    if (!oldAssetId || !cand || !cand.sessionId) return;
 
     try {
-      showNotice("正在将选中的重绘结果安全覆盖原图并更新素材库...", "info");
+      showNotice(`正在将第 ${cand.roundNumber} 轮 #${cand.indexInRound} 重绘结果安全覆盖原图并更新素材库...`, "info");
 
       const res = await fetch(`/api/assets/${encodeURIComponent(oldAssetId)}/inpaint/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          session_id: inpaintEditor.sessionId,
+          session_id: cand.sessionId,
           candidate_id: cand.candidate_id,
         }),
       });
@@ -4657,6 +4804,9 @@
       }
 
       // 8. 切回查看详情模式并重新渲染
+      inpaintEditor.currentAssetId = null;
+      inpaintEditor.batches = [];
+      inpaintEditor.activeCandidate = null;
       switchLightboxMode("view");
       await renderLightboxCurrent();
     } catch (err) {
@@ -4666,24 +4816,26 @@
 
   /** 放弃本次重绘并清理缓存 */
   async function handleInpaintDiscard() {
-    if (inpaintEditor.sessionId) {
+    const sessionIds = [...new Set(inpaintEditor.batches.map((b) => b.sessionId).filter(Boolean))];
+    for (const sid of sessionIds) {
       try {
-        await fetch(`/api/inpaint-cache/${encodeURIComponent(inpaintEditor.sessionId)}`, { method: "DELETE" });
+        await fetch(`/api/inpaint-cache/${encodeURIComponent(sid)}`, { method: "DELETE" });
       } catch (e) {
         // ignore cleanup error
       }
     }
-    inpaintEditor.sessionId = null;
-    inpaintEditor.candidates = [];
+    inpaintEditor.batches = [];
+    inpaintEditor.activeCandidate = null;
     inpaintClearMask();
 
     if (elements.inpaintResultsSection) elements.inpaintResultsSection.classList.add("hidden");
+    if (elements.inpaintStickyFooter) elements.inpaintStickyFooter.classList.add("hidden");
     if (elements.inpaintProgressBox) elements.inpaintProgressBox.classList.add("hidden");
     if (elements.inpaintCompareWrap) elements.inpaintCompareWrap.classList.add("hidden");
     if (elements.inpaintCanvasWrap) elements.inpaintCanvasWrap.classList.remove("hidden");
     if (elements.inpaintToggleDiffBtn) elements.inpaintToggleDiffBtn.classList.add("hidden");
 
-    showNotice("已放弃本次重绘修改，原图保持不变", "info");
+    showNotice("已放弃全部重绘修改，原图保持不变", "info");
   }
 
   function switchLightboxMode(mode) {
@@ -5979,7 +6131,7 @@
 
   if (elements.previewDialog) {
     elements.previewDialog.addEventListener("close", () => {
-      if (inpaintEditor.sessionId) {
+      if (inpaintEditor.batches && inpaintEditor.batches.length > 0) {
         handleInpaintDiscard();
       }
       inpaintEditor.currentAssetId = null;
