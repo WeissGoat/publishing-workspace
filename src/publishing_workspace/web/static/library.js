@@ -4432,8 +4432,8 @@
 
     [inpaintEditor.canvasBg, inpaintEditor.canvasMask, inpaintEditor.canvasCursor].forEach((c) => {
       if (!c) return;
-      c.width = iW;
-      c.height = iH;
+      if (c.width !== iW) c.width = iW;
+      if (c.height !== iH) c.height = iH;
       c.style.width = displayW + "px";
       c.style.height = displayH + "px";
       c.style.left = offsetX + "px";
@@ -4443,6 +4443,14 @@
     // 绘制原图到背景画布
     if (inpaintEditor.ctxBg) {
       inpaintEditor.ctxBg.drawImage(inpaintEditor.originalImg, 0, 0, iW, iH);
+    }
+
+    // 恢复遮罩内容（确保切换回调整遮罩时，已有涂抹遮罩 100% 完整显示）
+    if (inpaintEditor.ctxMask && inpaintEditor.undoStack.length > 0) {
+      const topSnap = inpaintEditor.undoStack[inpaintEditor.undoStack.length - 1];
+      if (topSnap && topSnap.width === iW && topSnap.height === iH) {
+        inpaintEditor.ctxMask.putImageData(topSnap, 0, 0);
+      }
     }
 
     fitInpaintCompareToWrap();
