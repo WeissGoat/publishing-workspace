@@ -1510,6 +1510,37 @@ input[type="search"]::-webkit-search-results-decoration {
   flex-shrink: 0;
 }
 .lightbox-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.lightbox-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(14, 165, 233, 0.25));
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  border-radius: 16px;
+  color: #38bdf8;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.lightbox-back-btn:hover {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.3), rgba(14, 165, 233, 0.45));
+  border-color: #38bdf8;
+  color: #ffffff;
+  transform: translateX(-2px);
+  box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+}
+.lightbox-title-text-wrap {
   min-width: 0;
   flex: 1;
 }
@@ -2162,6 +2193,45 @@ input[type="search"]::-webkit-search-results-decoration {
   display: flex;
   flex-direction: column;
 }
+.lb-related-section .section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.section-title-left {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.lb-related-view-toggles {
+  display: flex;
+  gap: 2px;
+  background: #11161d;
+  padding: 2px;
+  border-radius: 5px;
+  border: 1px solid #233041;
+}
+.lb-view-toggle-btn {
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.lb-view-toggle-btn:hover {
+  color: #f1f5f9;
+}
+.lb-view-toggle-btn.active {
+  background: #0284c7;
+  color: #ffffff;
+  font-weight: 600;
+}
+
 .lb-related-tabs {
   display: flex;
   gap: 4px;
@@ -2169,7 +2239,7 @@ input[type="search"]::-webkit-search-results-decoration {
   padding: 3px;
   border-radius: 6px;
   border: 1px solid #233041;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .lb-rel-tab-btn {
   flex: 1;
@@ -2204,12 +2274,12 @@ input[type="search"]::-webkit-search-results-decoration {
 }
 
 .lb-related-list-wrap {
-  max-height: 260px;
-  min-height: 48px;
+  max-height: 380px;
+  min-height: 52px;
   overflow-y: auto;
   overflow-x: hidden;
   margin-top: 8px;
-  padding-right: 2px;
+  padding-right: 3px;
 }
 .lb-related-list-wrap::-webkit-scrollbar {
   width: 5px;
@@ -2225,13 +2295,8 @@ input[type="search"]::-webkit-search-results-decoration {
   background: #475569;
 }
 
-.lb-related-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 .lb-related-empty {
-  padding: 16px 12px;
+  padding: 18px 12px;
   text-align: center;
   font-size: 11px;
   color: #64748b;
@@ -2240,10 +2305,108 @@ input[type="search"]::-webkit-search-results-decoration {
   border: 1px dashed #263140;
 }
 
-.lb-related-card {
+/* ================= 🔲 网格模式 (默认 2 列卡片) ================= */
+.lb-related-list.view-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.lb-related-list.view-grid .lb-related-card {
+  display: flex;
+  flex-direction: column;
+  background: #131922;
+  border: 1px solid #233041;
+  border-radius: 6px;
+  padding: 6px;
+  gap: 6px;
+  transition: all 0.15s ease;
+  position: relative;
+}
+.lb-related-list.view-grid .lb-related-card:hover {
+  background: #182230;
+  border-color: #38bdf8;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.lb-related-list.view-grid .lb-related-thumb-wrap {
+  width: 100%;
+  height: 115px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #080b0f;
+  position: relative;
+  cursor: pointer;
+  border: 1px solid #232f3e;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+}
+.lb-related-list.view-grid .lb-related-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+.lb-related-list.view-grid .lb-related-thumb-wrap:hover .lb-related-thumb-img {
+  transform: scale(1.06);
+}
+.lb-related-list.view-grid .lb-related-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.lb-related-list.view-grid .lb-related-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.lb-related-list.view-grid .lb-related-name:hover {
+  color: #38bdf8;
+}
+.lb-related-list.view-grid .lb-related-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 10px;
+  color: #64748b;
+}
+.lb-related-list.view-grid .lb-related-snaps-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 1px;
+}
+.lb-related-list.view-grid .lb-related-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+.lb-related-list.view-grid .lb-rel-view-btn,
+.lb-related-list.view-grid .lb-rel-jump-btn {
+  flex: 1;
+  padding: 4px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  justify-content: center;
+}
+
+/* ================= ☰ 列表模式 (单列大缩略图卡片) ================= */
+.lb-related-list.view-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lb-related-list.view-list .lb-related-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 6px 8px;
   background: #131922;
   border: 1px solid #233041;
@@ -2251,14 +2414,13 @@ input[type="search"]::-webkit-search-results-decoration {
   transition: all 0.15s ease;
   position: relative;
 }
-.lb-related-card:hover {
+.lb-related-list.view-list .lb-related-card:hover {
   background: #17202b;
   border-color: #38bdf8;
 }
-
-.lb-related-thumb-wrap {
-  width: 50px;
-  height: 50px;
+.lb-related-list.view-list .lb-related-thumb-wrap {
+  width: 78px;
+  height: 78px;
   border-radius: 4px;
   overflow: hidden;
   background: #0b0f14;
@@ -2268,25 +2430,25 @@ input[type="search"]::-webkit-search-results-decoration {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
-.lb-related-thumb-img {
+.lb-related-list.view-list .lb-related-thumb-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   transition: transform 0.15s ease;
 }
-.lb-related-thumb-wrap:hover .lb-related-thumb-img {
+.lb-related-list.view-list .lb-related-thumb-wrap:hover .lb-related-thumb-img {
   transform: scale(1.08);
 }
-
-.lb-related-info {
+.lb-related-list.view-list .lb-related-info {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
-.lb-related-name {
+.lb-related-list.view-list .lb-related-name {
   font-size: 11px;
   font-weight: 600;
   color: #f1f5f9;
@@ -2294,19 +2456,55 @@ input[type="search"]::-webkit-search-results-decoration {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: color 0.15s ease;
 }
-.lb-related-name:hover {
+.lb-related-list.view-list .lb-related-name:hover {
   color: #38bdf8;
 }
-
-.lb-related-meta-row {
+.lb-related-list.view-list .lb-related-meta-row {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-size: 10px;
   color: #64748b;
 }
+.lb-related-list.view-list .lb-related-snaps-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+.lb-related-list.view-list .lb-related-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: flex-end;
+}
+
+/* 缩略图角标与按住对比提示 */
+.lb-thumb-peek-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 1px 4px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #38bdf8;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  opacity: 0.9;
+  transition: opacity 0.15s ease;
+}
+.lb-related-card:hover .lb-thumb-peek-badge {
+  opacity: 1;
+  background: rgba(2, 132, 199, 0.9);
+  color: #ffffff;
+}
+
 .lb-related-tag-badge {
   display: inline-flex;
   align-items: center;
@@ -2319,13 +2517,6 @@ input[type="search"]::-webkit-search-results-decoration {
   border: 1px solid rgba(56, 189, 248, 0.3);
 }
 
-.lb-related-snaps-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 1px;
-}
 .lb-related-snap-chip {
   font-size: 9px;
   padding: 1px 5px;
@@ -2343,13 +2534,6 @@ input[type="search"]::-webkit-search-results-decoration {
   border-color: var(--accent);
 }
 
-.lb-related-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex-shrink: 0;
-  align-items: flex-end;
-}
 .lb-rel-view-btn {
   padding: 3px 6px;
   font-size: 10px;
@@ -2362,7 +2546,8 @@ input[type="search"]::-webkit-search-results-decoration {
   transition: all 0.12s ease;
 }
 .lb-rel-view-btn:hover {
-  background: #334155;
+  background: #0284c7;
+  border-color: #38bdf8;
   color: #fff;
 }
 
@@ -2384,6 +2569,60 @@ input[type="search"]::-webkit-search-results-decoration {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+
+/* ================= 🔍 悬浮高清大图放大镜 Popover ================= */
+.lb-hover-preview-popover {
+  position: fixed;
+  z-index: 999999;
+  width: 320px;
+  height: 320px;
+  background: #080c12;
+  border: 2px solid #38bdf8;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.25);
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  animation: popoverFadeIn 0.15s ease-out;
+}
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+.lb-hover-preview-popover img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* 按住对比时大图上的悬浮水印提示 */
+.lb-peek-indicator-banner {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.92), rgba(14, 165, 233, 0.92));
+  color: #ffffff;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: pulsePeek 1.5s infinite ease-in-out;
+}
+@keyframes pulsePeek {
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.75; }
 }
 
 /* 多快照悬浮下拉菜单 */

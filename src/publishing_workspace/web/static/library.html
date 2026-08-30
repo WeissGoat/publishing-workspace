@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260830-08">
+  <link rel="stylesheet" href="/library.css?v=20260830-09">
 </head>
 <body>
   <main class="app-shell">
@@ -514,8 +514,14 @@
       <!-- 顶部标题与操作栏 -->
       <header class="lightbox-header">
         <div class="lightbox-title-group">
-          <h3 id="lightbox-filename" class="lightbox-filename">素材名称</h3>
-          <p id="lightbox-filepath" class="lightbox-filepath" title="点击复制完整路径"></p>
+          <button id="lightbox-back-btn" class="lightbox-back-btn hidden" type="button" title="返回上一张图片 (Alt+← / Backspace)">
+            <span class="back-icon">←</span>
+            <span id="lightbox-back-label" class="back-text">返回原图</span>
+          </button>
+          <div class="lightbox-title-text-wrap">
+            <h3 id="lightbox-filename" class="lightbox-filename">素材名称</h3>
+            <p id="lightbox-filepath" class="lightbox-filepath" title="点击复制完整路径"></p>
+          </div>
         </div>
         <!-- 🌟 Lightbox 视图与图片编辑页签切换 -->
         <div id="lightbox-mode-tabs" class="segmented-control lightbox-mode-tabs">
@@ -728,8 +734,14 @@
             <!-- 🖼️ 关联图片 (同批生成 / 同Seed / 邻近生图) -->
             <div id="lb-related-section" class="lightbox-meta-section lb-related-section">
               <div class="section-title-row">
-                <h4 class="lightbox-section-title">🖼️ 关联图片 <span id="lb-related-total-count" class="meta-count-badge">(0)</span></h4>
-                <span class="lightbox-section-hint">点击缩略图查看，或直达快照定位</span>
+                <div class="section-title-left">
+                  <h4 class="lightbox-section-title">🖼️ 关联图片 <span id="lb-related-total-count" class="meta-count-badge">(0)</span></h4>
+                  <span class="lightbox-section-hint">点击查看，或按住👁️对比</span>
+                </div>
+                <div class="lb-related-view-toggles" id="lb-related-view-toggles">
+                  <button type="button" class="lb-view-toggle-btn active" data-view="grid" title="双列高清网格模式">🔲 网格</button>
+                  <button type="button" class="lb-view-toggle-btn" data-view="list" title="紧凑列表模式">☰ 列表</button>
+                </div>
               </div>
               
               <!-- 维度分段切换页签 -->
@@ -794,6 +806,8 @@
         </aside>
       </div>
     </div>
+    <!-- 悬浮高清大图放大镜 Popover -->
+    <div id="lb-hover-preview-popover" class="lb-hover-preview-popover hidden"></div>
   </dialog>
 
   <!-- ✂️ Pixiv 缩略图范围裁剪调整 Modal -->
@@ -869,6 +883,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260830-08" defer></script>
+  <script src="/library.js?v=20260830-09" defer></script>
 </body>
 </html>

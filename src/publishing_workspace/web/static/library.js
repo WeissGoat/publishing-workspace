@@ -356,14 +356,18 @@
     lbSnapshotsCount: document.getElementById("lb-snapshots-count"),
     lbSnapshotsList: document.getElementById("lb-snapshots-list"),
 
+    lightboxBackBtn: document.getElementById("lightbox-back-btn"),
+    lightboxBackLabel: document.getElementById("lightbox-back-label"),
     lbRelatedSection: document.getElementById("lb-related-section"),
     lbRelatedTotalCount: document.getElementById("lb-related-total-count"),
+    lbRelatedViewToggles: document.getElementById("lb-related-view-toggles"),
     lbRelatedTabs: document.getElementById("lb-related-tabs"),
     lbRelBadgeBatch: document.getElementById("lb-rel-badge-batch"),
     lbRelBadgeSeed: document.getElementById("lb-rel-badge-seed"),
     lbRelBadgeAdj: document.getElementById("lb-rel-badge-adj"),
     lbRelatedList: document.getElementById("lb-related-list"),
     lbRelatedHint: document.getElementById("lb-related-hint"),
+    lbHoverPreviewPopover: document.getElementById("lb-hover-preview-popover"),
   };
 
   let noticeTimer = null;
@@ -1902,6 +1906,8 @@
     activeAssetId: null,
     assetList: [],
     currentIndex: -1,
+    history: [],
+    relatedViewMode: localStorage.getItem("pw_related_view_mode") || "grid",
   };
 
   function getVisibleAssetIds() {
@@ -1912,10 +1918,52 @@
     return list;
   }
 
-  async function openLightbox(assetId, customAssetList = null) {
+  function updateLightboxBackButton() {
+    if (!elements.lightboxBackBtn) return;
+    const historyLen = state.lightbox.history ? state.lightbox.history.length : 0;
+    if (historyLen > 0) {
+      const lastItem = state.lightbox.history[historyLen - 1];
+      elements.lightboxBackBtn.classList.remove("hidden");
+      if (elements.lightboxBackLabel) {
+        const rawName = lastItem.displayName || "原图";
+        const shortName = rawName.length > 18 ? rawName.slice(0, 16) + "..." : rawName;
+        elements.lightboxBackLabel.textContent = `返回: ${shortName}`;
+      }
+      elements.lightboxBackBtn.title = `返回上一张: ${lastItem.displayName || ''} (Alt+← / Backspace)`;
+    } else {
+      elements.lightboxBackBtn.classList.add("hidden");
+    }
+  }
+
+  function popLightboxHistory() {
+    if (!state.lightbox.history || state.lightbox.history.length === 0) return;
+    const prev = state.lightbox.history.pop();
+    if (!prev) return;
+    state.lightbox.assetList = prev.assetList && prev.assetList.length > 0 ? prev.assetList : getVisibleAssetIds();
+    state.lightbox.currentIndex = prev.currentIndex >= 0 ? prev.currentIndex : state.lightbox.assetList.indexOf(prev.assetId);
+    state.lightbox.activeAssetId = prev.assetId;
+    updateLightboxBackButton();
+    renderLightboxCurrent();
+  }
+
+  async function openLightbox(assetId, customAssetList = null, options = {}) {
+    const pushHistory = options.pushHistory === true;
+    if (pushHistory && state.lightbox.activeAssetId && state.lightbox.activeAssetId !== assetId) {
+      const currentItem = state.loadedAssets.get(state.lightbox.activeAssetId);
+      if (!state.lightbox.history) state.lightbox.history = [];
+      state.lightbox.history.push({
+        assetId: state.lightbox.activeAssetId,
+        assetList: [...state.lightbox.assetList],
+        currentIndex: state.lightbox.currentIndex,
+        displayName: currentItem?.display_name || state.lightbox.activeAssetId,
+      });
+    } else if (!pushHistory && (!elements.previewDialog || !elements.previewDialog.open)) {
+      state.lightbox.history = [];
+    }
+
     if (Array.isArray(customAssetList) && customAssetList.length > 0) {
       state.lightbox.assetList = [...customAssetList];
-    } else {
+    } else if (!pushHistory || !state.lightbox.assetList.length) {
       state.lightbox.assetList = getVisibleAssetIds();
     }
     state.lightbox.currentIndex = state.lightbox.assetList.indexOf(assetId);
@@ -1929,6 +1977,7 @@
       elements.previewDialog.showModal();
     }
 
+    updateLightboxBackButton();
     await renderLightboxCurrent();
   }
 
@@ -2221,12 +2270,42 @@
     }
   }
 
+  function positionHoverPopover(e) {
+    if (!elements.lbHoverPreviewPopover) return;
+    const popover = elements.lbHoverPreviewPopover;
+    const popW = 320;
+    const popH = 320;
+    const padding = 16;
+    let x = e.clientX - popW - padding;
+    let y = e.clientY - (popH / 2);
+
+    if (x < padding) {
+      x = e.clientX + padding;
+    }
+    if (y < padding) y = padding;
+    if (y + popH > window.innerHeight - padding) {
+      y = window.innerHeight - popH - padding;
+    }
+
+    popover.style.left = `${x}px`;
+    popover.style.top = `${y}px`;
+  }
+
   function renderRelatedDimension(dimKey) {
     if (!elements.lbRelatedList) return;
     const rel = state.lightbox.currentRelated;
     const dims = rel?.dimensions || {};
     const dim = dims[dimKey] || { items: [], total: 0 };
     const items = Array.isArray(dim.items) ? dim.items : [];
+
+    const viewMode = state.lightbox.relatedViewMode || "grid";
+    elements.lbRelatedList.className = `lb-related-list view-${viewMode}`;
+
+    if (elements.lbRelatedViewToggles) {
+      elements.lbRelatedViewToggles.querySelectorAll(".lb-view-toggle-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.view === viewMode);
+      });
+    }
 
     if (items.length === 0) {
       elements.lbRelatedList.innerHTML = '<div class="lb-related-empty">暂无该维度的关联图片</div>';
@@ -2281,8 +2360,9 @@
 
       return `
         <div class="lb-related-card" data-asset-id="${escapeHtml(item.asset_id)}">
-          <div class="lb-related-thumb-wrap" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="点击在当前弹窗查看">
+          <div class="lb-related-thumb-wrap" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="点击查看详情 (长按👁️对比)">
             <img class="lb-related-thumb-img" src="/api/assets/${encodeURIComponent(item.asset_id)}/preview?v=${Date.now()}" alt="${escapeHtml(item.display_name)}" loading="lazy">
+            <span class="lb-thumb-peek-badge" title="长按可在左侧大图临时对比">👁️ 对比</span>
           </div>
           <div class="lb-related-info">
             <strong class="lb-related-name" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</strong>
@@ -2293,22 +2373,91 @@
             ${snaps.length > 0 ? `<div class="lb-related-snaps-row">${snapChipsHtml}</div>` : ""}
           </div>
           <div class="lb-related-actions">
-            <button type="button" class="lb-rel-view-btn" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}">🔍 查看</button>
+            <button type="button" class="lb-rel-view-btn" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="查看该图片详情（可按顶部返回切回）">🔍 查看</button>
             ${jumpBtnHtml}
           </div>
         </div>
       `;
     }).join("");
 
-    // 绑定查看与定位事件
+    // 绑定查看事件 (进入历史栈)
     elements.lbRelatedList.querySelectorAll('[data-action="view-related"]').forEach((el) => {
       el.addEventListener("click", (e) => {
+        if (e.target.closest(".lb-thumb-peek-badge")) return;
         e.stopPropagation();
-        const targetId = el.dataset.assetId;
+        const targetId = el.dataset.assetId || el.closest("[data-asset-id]")?.dataset.assetId;
         if (targetId) {
-          openLightbox(targetId);
+          openLightbox(targetId, null, { pushHistory: true });
         }
       });
+    });
+
+    // 绑定悬浮放大镜与按住临时对比 (Peek)
+    elements.lbRelatedList.querySelectorAll(".lb-related-card").forEach((card) => {
+      const assetId = card.dataset.assetId;
+      const targetItem = items.find((it) => it.asset_id === assetId);
+      if (!targetItem) return;
+
+      const thumbWrap = card.querySelector(".lb-related-thumb-wrap");
+      const peekBadge = card.querySelector(".lb-thumb-peek-badge");
+      const targetPreviewUrl = `/api/assets/${encodeURIComponent(assetId)}/preview?v=${Date.now()}`;
+
+      if (thumbWrap) {
+        thumbWrap.addEventListener("mouseenter", (e) => {
+          if (!elements.lbHoverPreviewPopover) return;
+          elements.lbHoverPreviewPopover.innerHTML = `<img src="${targetPreviewUrl}" alt="${escapeHtml(targetItem.display_name)}" />`;
+          elements.lbHoverPreviewPopover.classList.remove("hidden");
+          positionHoverPopover(e);
+        });
+        thumbWrap.addEventListener("mousemove", (e) => {
+          positionHoverPopover(e);
+        });
+        thumbWrap.addEventListener("mouseleave", () => {
+          if (elements.lbHoverPreviewPopover) {
+            elements.lbHoverPreviewPopover.classList.add("hidden");
+          }
+        });
+      }
+
+      const startPeek = (e) => {
+        if (e.button && e.button !== 0) return;
+        state.lightbox._originalPreviewSrc = elements.previewImage.src;
+        elements.previewImage.src = targetPreviewUrl;
+
+        let banner = document.getElementById("lb-peek-banner");
+        if (!banner && elements.previewImage.parentElement) {
+          banner = document.createElement("div");
+          banner.id = "lb-peek-banner";
+          banner.className = "lb-peek-indicator-banner";
+          elements.previewImage.parentElement.appendChild(banner);
+        }
+        if (banner) {
+          banner.textContent = `👁️ 正在对比: ${targetItem.display_name || ''} (松开恢复)`;
+        }
+      };
+
+      const stopPeek = () => {
+        if (state.lightbox._originalPreviewSrc) {
+          elements.previewImage.src = state.lightbox._originalPreviewSrc;
+          delete state.lightbox._originalPreviewSrc;
+        }
+        const banner = document.getElementById("lb-peek-banner");
+        if (banner) banner.remove();
+      };
+
+      if (peekBadge) {
+        peekBadge.addEventListener("mousedown", (e) => {
+          e.stopPropagation();
+          startPeek(e);
+        });
+        peekBadge.addEventListener("mouseup", stopPeek);
+        peekBadge.addEventListener("mouseleave", stopPeek);
+        peekBadge.addEventListener("touchstart", (e) => {
+          e.stopPropagation();
+          startPeek(e);
+        }, { passive: true });
+        peekBadge.addEventListener("touchend", stopPeek, { passive: true });
+      }
     });
 
     elements.lbRelatedList.querySelectorAll('[data-action="jump-rel-snap"]').forEach((btn) => {
@@ -6123,6 +6272,13 @@
     });
   }
 
+  if (elements.lightboxBackBtn) {
+    elements.lightboxBackBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      popLightboxHistory();
+    });
+  }
+
   if (elements.closePreview) {
     elements.closePreview.addEventListener("click", () => {
       elements.previewDialog.close();
@@ -6131,6 +6287,11 @@
 
   if (elements.previewDialog) {
     elements.previewDialog.addEventListener("close", () => {
+      state.lightbox.history = [];
+      updateLightboxBackButton();
+      if (elements.lbHoverPreviewPopover) {
+        elements.lbHoverPreviewPopover.classList.add("hidden");
+      }
       if (inpaintEditor.batches && inpaintEditor.batches.length > 0) {
         handleInpaintDiscard();
       }
@@ -6158,10 +6319,18 @@
   document.addEventListener("keydown", (e) => {
     // 1. 若在大图弹窗中
     if (elements.previewDialog && elements.previewDialog.open) {
-      if (e.key === "ArrowLeft") {
+      const isInput = document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA" || document.activeElement.isContentEditable);
+      if (!isInput && (e.key === "Backspace" || (e.altKey && e.key === "ArrowLeft"))) {
+        if (state.lightbox.history && state.lightbox.history.length > 0) {
+          e.preventDefault();
+          popLightboxHistory();
+          return;
+        }
+      }
+      if (!isInput && e.key === "ArrowLeft") {
         e.preventDefault();
         navigateLightbox(-1);
-      } else if (e.key === "ArrowRight") {
+      } else if (!isInput && e.key === "ArrowRight") {
         e.preventDefault();
         navigateLightbox(1);
       }
@@ -6255,6 +6424,19 @@
       const dimKey = btn.dataset.relTab;
       state.lightbox.currentRelatedActiveTab = dimKey;
       renderRelatedDimension(dimKey);
+    });
+  }
+
+  // 🖼️ 关联图片展示模式切换 (网格 / 列表)
+  if (elements.lbRelatedViewToggles) {
+    elements.lbRelatedViewToggles.addEventListener("click", (e) => {
+      const btn = e.target.closest(".lb-view-toggle-btn");
+      if (!btn) return;
+      e.stopPropagation();
+      const view = btn.dataset.view || "grid";
+      state.lightbox.relatedViewMode = view;
+      localStorage.setItem("pw_related_view_mode", view);
+      renderRelatedDimension(state.lightbox.currentRelatedActiveTab || "same_batch");
     });
   }
 
