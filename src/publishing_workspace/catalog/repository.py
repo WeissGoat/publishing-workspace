@@ -105,8 +105,21 @@ class CatalogRepository:
 
         with self.connection() as connection:
             self._ensure_imports_tags_column(connection)
+            self._align_import_items_with_paths(connection)
 
         _INITIALIZED_CATALOGS.add(resolved_key)
+
+    def _align_import_items_with_paths(self, connection: sqlite3.Connection) -> None:
+        """自动对齐并自愈 import_items 中的历史 asset_id 与当前物理文件 asset_paths。"""
+        try:
+            connection.execute(
+                "UPDATE import_items "
+                "SET asset_id = (SELECT ap.asset_id FROM asset_paths ap WHERE ap.path = import_items.resolved_path) "
+                "WHERE resolved_path IN (SELECT path FROM asset_paths WHERE available=1) "
+                "  AND (asset_id IS NULL OR asset_id != (SELECT ap.asset_id FROM asset_paths ap WHERE ap.path = import_items.resolved_path))"
+            )
+        except Exception as exc:
+            logger.debug("对齐 import_items 历史 Hash 略过: %s", exc)
 
     def _read_version(self) -> int | None:
         if not self.path.exists():
@@ -609,6 +622,219 @@ class CatalogRepository:
                 "created_at": r["import_created_at"],
             })
         return results
+
+    def related_assets_for_asset(
+        self,
+        asset_id: str,
+        *,
+        seed: Any = None,
+        extract_metadata_fn: Any = None,
+    ) -> dict[str, Any]:
+        """查询与指定资产关联的图片（同批生成变体、同角色同Seed、同角色时间邻近同动作组）。"""
+        import re
+
+        target_records = self.assets_by_ids([asset_id])
+        target = target_records.get(asset_id)
+        if target is None:
+            return {
+                "asset_id": asset_id,
+                "dimensions": {
+                    "same_batch": {"label": "🎯 同批生成", "total": 0, "items": []},
+                    "same_seed": {"label": "🎲 同Seed", "total": 0, "items": []},
+                    "time_adjacent": {"label": "👤 邻近生图", "total": 0, "displayed_count": 0, "items": []},
+                },
+            }
+
+        target_display_name = target.display_name or Path(target.path).name
+
+        # 提取目标资产的角色与动作组
+        target_character = ""
+        target_action_group = ""
+        for node in target.node_info.nodes:
+            if node.role == "character" and node.id:
+                target_character = node.id
+            elif node.role == "action_group" and node.id:
+                target_action_group = node.id
+
+        target_mtime_ns = target.fingerprint.modified_ns
+
+        # 全局去重集合（排他性聚合）
+        seen_asset_ids: set[str] = {asset_id}
+
+        # 1. 优先级 1：🎯 同批生成变体 (Same Batch)
+        same_batch_items: list[dict[str, Any]] = []
+        batch_match = re.match(r"^(.*?)(?:_|-)(\d+)(\.[a-zA-Z0-9]+)$", target_display_name)
+        if batch_match:
+            prefix = batch_match.group(1)
+            target_idx = int(batch_match.group(2))
+            ext = batch_match.group(3)
+            pattern_re = re.compile(rf"^{re.escape(prefix)}(?:_|-)(\d+){re.escape(ext)}$", re.IGNORECASE)
+
+            with self.connection() as conn:
+                candidate_rows = conn.execute(
+                    "SELECT DISTINCT ii.asset_id, ii.display_name, ii.resolved_path "
+                    "FROM import_items ii "
+                    "WHERE (ii.display_name LIKE ? OR ii.display_name LIKE ?) "
+                    "  AND ii.asset_id != ? AND ii.asset_id IS NOT NULL",
+                    (f"{prefix}_%", f"{prefix}-%", asset_id),
+                ).fetchall()
+
+            candidates_by_id: dict[str, tuple[int, str, str]] = {}
+            for r in candidate_rows:
+                cand_id = r["asset_id"]
+                cand_name = r["display_name"]
+                if cand_id in seen_asset_ids:
+                    continue
+                m = pattern_re.match(cand_name)
+                if m:
+                    idx = int(m.group(1))
+                    candidates_by_id[cand_id] = (idx, cand_name, r["resolved_path"] or "")
+
+            cand_assets = self.assets_by_ids(list(candidates_by_id.keys())) if candidates_by_id else {}
+            for cand_id, (idx, cand_name, r_path) in sorted(candidates_by_id.items(), key=lambda x: x[1][0]):
+                cand_rec = cand_assets.get(cand_id)
+                seen_asset_ids.add(cand_id)
+                snaps = self.snapshots_for_asset(cand_id)
+                same_batch_items.append({
+                    "asset_id": cand_id,
+                    "display_name": cand_name,
+                    "batch_index": idx,
+                    "relation_type": "same_batch",
+                    "relation_label": f"同批变体 #{idx}",
+                    "width": cand_rec.image.width if cand_rec and cand_rec.image else None,
+                    "height": cand_rec.image.height if cand_rec and cand_rec.image else None,
+                    "snapshots": snaps,
+                })
+
+        # 2. 优先级 2：🎲 同角色 + 同 Seed 变体 (Same Character & Same Seed)
+        same_seed_items: list[dict[str, Any]] = []
+        if seed is not None and str(seed).strip() and str(seed).strip() != "-":
+            target_seed_str = str(seed).strip()
+            with self.connection() as conn:
+                if target_character:
+                    cand_seed_rows = conn.execute(
+                        "SELECT DISTINCT an.asset_id "
+                        "FROM asset_nodes an "
+                        "WHERE an.role='character' AND an.node_id=? AND an.asset_id != ?",
+                        (target_character, asset_id),
+                    ).fetchall()
+                else:
+                    cand_seed_rows = conn.execute(
+                        "SELECT DISTINCT ap.asset_id "
+                        "FROM asset_paths ap "
+                        "WHERE ap.asset_id != ?",
+                        (asset_id,),
+                    ).fetchall()
+
+            cand_ids = [r["asset_id"] for r in cand_seed_rows if r["asset_id"] not in seen_asset_ids]
+            if cand_ids:
+                cand_records = self.assets_by_ids(cand_ids[:50])
+                for cand_id, cand_rec in cand_records.items():
+                    if cand_id in seen_asset_ids:
+                        continue
+                    cand_seed = None
+                    if extract_metadata_fn and cand_rec.path:
+                        cand_meta = extract_metadata_fn(Path(cand_rec.path))
+                        cand_seed = str(cand_meta.get("seed") or "").strip()
+                    if cand_seed and cand_seed == target_seed_str:
+                        seen_asset_ids.add(cand_id)
+                        snaps = self.snapshots_for_asset(cand_id)
+                        same_seed_items.append({
+                            "asset_id": cand_id,
+                            "display_name": cand_rec.display_name or Path(cand_rec.path).name,
+                            "relation_type": "same_seed",
+                            "relation_label": f"同Seed: {target_seed_str}",
+                            "width": cand_rec.image.width if cand_rec.image else None,
+                            "height": cand_rec.image.height if cand_rec.image else None,
+                            "snapshots": snaps,
+                        })
+                        if len(same_seed_items) >= 10:
+                            break
+
+        # 3. 优先级 3：👤 同角色 + 时间邻近 + 同 action_group (Time Adjacent)
+        time_adjacent_items: list[dict[str, Any]] = []
+        total_adjacent_count = 0
+        if target_character:
+            with self.connection() as conn:
+                if target_action_group:
+                    adj_rows = conn.execute(
+                        "SELECT DISTINCT an1.asset_id, ap.modified_ns "
+                        "FROM asset_nodes an1 "
+                        "JOIN asset_nodes an2 ON an1.asset_id = an2.asset_id "
+                        "JOIN asset_paths ap ON ap.asset_id = an1.asset_id "
+                        "WHERE an1.role='character' AND an1.node_id=? "
+                        "  AND an2.role='action_group' AND an2.node_id=? "
+                        "  AND an1.asset_id != ?",
+                        (target_character, target_action_group, asset_id),
+                    ).fetchall()
+                else:
+                    adj_rows = conn.execute(
+                        "SELECT DISTINCT an1.asset_id, ap.modified_ns "
+                        "FROM asset_nodes an1 "
+                        "JOIN asset_paths ap ON ap.asset_id = an1.asset_id "
+                        "WHERE an1.role='character' AND an1.node_id=? "
+                        "  AND an1.asset_id != ?",
+                        (target_character, asset_id),
+                    ).fetchall()
+
+            adj_candidates = []
+            seen_adj_ids: set[str] = set()
+            for r in adj_rows:
+                c_id = r["asset_id"]
+                if c_id in seen_asset_ids or c_id in seen_adj_ids:
+                    continue
+                seen_adj_ids.add(c_id)
+                cand_mtime_ns = r["modified_ns"] or 0
+                time_diff_sec = abs(cand_mtime_ns - target_mtime_ns) / 1_000_000_000
+                if time_diff_sec <= 7200:
+                    adj_candidates.append((time_diff_sec, c_id, cand_mtime_ns))
+
+            adj_candidates.sort(key=lambda x: x[0])
+            total_adjacent_count = len(adj_candidates)
+            top_adjacent = adj_candidates[:8]
+
+            if top_adjacent:
+                top_adj_ids = [x[1] for x in top_adjacent]
+                cand_records = self.assets_by_ids(top_adj_ids)
+                for diff_sec, cand_id, cand_mtime in top_adjacent:
+                    cand_rec = cand_records.get(cand_id)
+                    if not cand_rec:
+                        continue
+                    seen_asset_ids.add(cand_id)
+                    snaps = self.snapshots_for_asset(cand_id)
+                    diff_min = max(1, round(diff_sec / 60))
+                    time_label = f"相隔 ~{diff_min} 分钟" if diff_min > 0 else "同会话生图"
+                    time_adjacent_items.append({
+                        "asset_id": cand_id,
+                        "display_name": cand_rec.display_name or Path(cand_rec.path).name,
+                        "relation_type": "time_adjacent",
+                        "relation_label": f"同角色动作 · {time_label}",
+                        "width": cand_rec.image.width if cand_rec.image else None,
+                        "height": cand_rec.image.height if cand_rec.image else None,
+                        "snapshots": snaps,
+                    })
+
+        return {
+            "asset_id": asset_id,
+            "dimensions": {
+                "same_batch": {
+                    "label": "🎯 同批生成",
+                    "total": len(same_batch_items),
+                    "items": same_batch_items,
+                },
+                "same_seed": {
+                    "label": "🎲 同Seed",
+                    "total": len(same_seed_items),
+                    "items": same_seed_items,
+                },
+                "time_adjacent": {
+                    "label": "👤 邻近生图",
+                    "total": total_adjacent_count,
+                    "displayed_count": len(time_adjacent_items),
+                    "items": time_adjacent_items,
+                },
+            },
+        }
 
     def record_asset_alias(self, old_asset_id: str, new_asset_id: str, path: str = "") -> None:
         """记录资产别名映射（如重绘后原 SHA256 映射至新 SHA256）。"""

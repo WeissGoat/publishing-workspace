@@ -197,23 +197,36 @@ async def test_inpaint_service_cascades_to_tasks_and_exports(tmp_path: Path):
     paths, _, _ = init_workspace(tmp_path)
     catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
 
-    # 1. 导入初始绿色原图 (64x64)
+    # 1. 导入初始绿色原图 (64x64) 并记录为快照 import-test
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     img_path = source_dir / "sample.png"
     Image.new("RGB", (64, 64), "green").save(img_path)
 
-    stat = img_path.stat()
-    with catalog.connection() as conn:
-        res = catalog.ingest_asset(
-            conn,
-            img_path,
-            expected_size=stat.st_size,
-            expected_modified_ns=stat.st_mtime_ns,
-            readers=default_image_node_reader_registry(),
-            enrichers=[],
-        )
-        asset_id = res.asset.asset_id
+    from publishing_workspace.models import SelectionSet, ImportedItem
+    selection = SelectionSet(
+        id="import-test",
+        source_type="directory",
+        source_ref=str(source_dir),
+        items=[
+            ImportedItem(
+                source_path=str(img_path),
+                resolved_path=str(img_path),
+                source_type="directory",
+                source_ref=str(source_dir),
+                source_order=0,
+                display_name="sample.png",
+            )
+        ],
+    )
+    catalog.import_selection(
+        selection,
+        readers=default_image_node_reader_registry(),
+        enrichers=[],
+    )
+    imported = catalog.assets_for_import("import-test")
+    assert len(imported) == 1
+    asset_id = imported[0].asset_id
 
     # 2. 创建并保存一个包含该素材的投稿任务
     sub_service = SubmissionService()
@@ -221,7 +234,7 @@ async def test_inpaint_service_cascades_to_tasks_and_exports(tmp_path: Path):
         tmp_path,
         task_id=None,
         title="测试投稿",
-        source_import_id=None,
+        source_import_id="import-test",
         sets={"all": [asset_id], "post": [asset_id], "cover": [asset_id]},
     )
     task_id = sub_res.task_id
@@ -288,8 +301,10 @@ async def test_inpaint_service_cascades_to_tasks_and_exports(tmp_path: Path):
     with Image.open(old_queried_path) as im:
         assert im.getpixel((32, 32)) == (255, 255, 0)
 
-    old_queried_assets = catalog.assets_by_ids([asset_id])
-    assert asset_id in old_queried_assets
-    assert old_queried_assets[asset_id].path == str(img_path)
+    # 7. 验证快照导入表 import_items 也已被同步更新，查询快照素材返回最新黄色重绘图
+    snapshot_assets = catalog.assets_for_import("import-test")
+    assert len(snapshot_assets) == 1
+    assert snapshot_assets[0].asset_id == new_asset_id
+    assert snapshot_assets[0].path == str(img_path)
 
 
