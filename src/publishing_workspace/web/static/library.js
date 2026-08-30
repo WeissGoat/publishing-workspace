@@ -509,6 +509,16 @@
   const LAST_SELECTED_IMPORTS_KEY = "pw_last_selected_imports";
   const LAST_SELECTED_IMPORT_KEY = "pw_last_selected_import";
 
+  function hasSnapshotSelection() {
+    return Array.isArray(state.filters.import_ids) && state.filters.import_ids.length > 0;
+  }
+
+  function getSelectedImportKey() {
+    if (!hasSnapshotSelection()) return "";
+    if (state.filters.import_ids.includes("__all__")) return "__all__";
+    return [...state.filters.import_ids].sort().join(",");
+  }
+
   function getDefaultFilters(importKey = "") {
     const parsedIds = importKey ? (importKey.includes(",") ? importKey.split(",") : [importKey]) : [];
     return {
