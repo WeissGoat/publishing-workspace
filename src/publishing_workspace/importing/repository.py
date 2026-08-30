@@ -47,15 +47,18 @@ class ImportRunRepository:
         source_ref: str,
         mode: ImportMode,
         strict: bool,
+        tags: list[str] | None = None,
     ) -> ImportRunRecord:
         now = utc_now_iso()
         import_id = uuid4().hex
+        clean_tags = [str(t).strip() for t in tags if str(t).strip()] if tags else []
         with self.catalog.connection() as connection:
+            self.catalog._ensure_imports_tags_column(connection)
             connection.execute(
                 "INSERT INTO imports(import_id, source_type, source_ref, mode, strict, status, "
-                "pipeline_stage, warnings_json, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, 'created', 'input', '[]', ?, ?)",
-                (import_id, source_type, source_ref, mode, int(strict), now, now),
+                "pipeline_stage, tags_json, warnings_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 'created', 'input', ?, '[]', ?, ?)",
+                (import_id, source_type, source_ref, mode, int(strict), _json(clean_tags), now, now),
             )
         return self.get_run(import_id)
 
@@ -393,6 +396,7 @@ class ImportRunRepository:
             **run.counters.model_dump(),
             unique_assets=unique_assets,
             open_problems=open_problems,
+            tags=run.tags,
             reader_counts={row["reader"]: row["count"] for row in reader_rows},
             warnings=run.warnings,
         )
@@ -414,6 +418,7 @@ class ImportRunRepository:
         return [dict(row) for row in rows]
 
     def _run_from_row(self, row: sqlite3.Row) -> ImportRunRecord:
+        tags_raw = row["tags_json"] if "tags_json" in row.keys() else None
         return ImportRunRecord(
             import_id=row["import_id"],
             source_type=row["source_type"],
@@ -434,6 +439,7 @@ class ImportRunRepository:
                 failed_items=row["failed_items"],
                 held_problem_items=row["held_problem_items"],
             ),
+            tags=_loads(tags_raw) if tags_raw else [],
             warnings=_loads(row["warnings_json"]),
             error=_loads(row["error_json"]) if row["error_json"] else None,
             created_at=row["created_at"],

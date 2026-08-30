@@ -43,12 +43,15 @@ class ImportWorkflowService:
         strict: bool = False,
         legacy_tolerant: bool = False,
         retry_failed: bool = False,
+        tags: list[str] | None = None,
     ) -> ImportRunSummary:
+        clean_tags = [str(t).strip() for t in tags if str(t).strip()] if tags else []
         run = self.runs.create_run(
             source_type=input_type or "auto",
             source_ref=str(Path(source).expanduser().resolve()),
             mode="import",
             strict=strict,
+            tags=clean_tags,
         )
         lease = self.leases.acquire(run.import_id, allow_takeover=False)
         reporter = ProgressReporter(logger=logger)
@@ -65,12 +68,22 @@ class ImportWorkflowService:
             )
             selection = selection.model_copy(update={"id": run.import_id})
             self.runs.persist_selection(run.import_id, selection)
-            return self._run_planning_and_execution(
+            summary = self._run_planning_and_execution(
                 run.import_id,
                 lease=lease,
                 reporter=reporter,
                 retry_failed=retry_failed,
             )
+            if clean_tags:
+                with self.catalog.connection() as conn:
+                    rows = conn.execute(
+                        "SELECT DISTINCT asset_id FROM import_items WHERE import_id=? AND asset_id IS NOT NULL",
+                        (run.import_id,),
+                    ).fetchall()
+                    asset_ids = [str(r["asset_id"]) for r in rows if r["asset_id"]]
+                if asset_ids:
+                    self.catalog.set_asset_tags(asset_ids, clean_tags, note=f"Import {run.import_id}")
+            return summary
         except KeyboardInterrupt:
             self.runs.interrupt(run.import_id, reason="keyboard_interrupt")
             raise
@@ -219,6 +232,7 @@ class ImportWorkflowService:
             "run": summary.model_dump(mode="json"),
             "items": self.runs.items_for_snapshot(run_id),
             "problems": self.runs.problems_for_snapshot(run_id),
+            "tags": summary.tags,
             "reader_counts": summary.reader_counts,
             "warnings": summary.warnings,
         }

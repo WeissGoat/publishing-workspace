@@ -61,3 +61,75 @@ def test_assets_by_ids_preserves_requested_order_and_import_scope(tmp_path: Path
         [imported[0].asset_id],
         import_id="missing-import",
     ) == {}
+
+
+def test_snapshots_for_asset_returns_all_occurrences(tmp_path: Path):
+    img1 = _png(tmp_path / "set1" / "common.png", "red")
+    img2 = _png(tmp_path / "set1" / "unique.png", "blue")
+    img3 = _png(tmp_path / "set2" / "common_copy.png", "red")  # same content as img1
+
+    selection1 = SelectionSet(
+        id="import-1",
+        source_type="directory",
+        source_ref=str(tmp_path / "set1"),
+        items=[
+            ImportedItem(
+                source_path=str(img1),
+                resolved_path=str(img1),
+                source_type="directory",
+                source_ref=str(tmp_path / "set1"),
+                source_order=0,
+                display_name=img1.name,
+            ),
+            ImportedItem(
+                source_path=str(img2),
+                resolved_path=str(img2),
+                source_type="directory",
+                source_ref=str(tmp_path / "set1"),
+                source_order=1,
+                display_name=img2.name,
+            ),
+        ],
+    )
+    selection2 = SelectionSet(
+        id="import-2",
+        source_type="neev_playlist",
+        source_ref=str(tmp_path / "playlist.nvpls"),
+        items=[
+            ImportedItem(
+                source_path=str(img3),
+                resolved_path=str(img3),
+                source_type="neev_playlist",
+                source_ref=str(tmp_path / "playlist.nvpls"),
+                source_order=5,
+                display_name="custom_title.png",
+            ),
+        ],
+    )
+    repository = CatalogRepository(tmp_path / "catalog.sqlite")
+    repository.import_selection(
+        selection1,
+        readers=default_image_node_reader_registry(),
+        enrichers=[],
+    )
+    repository.import_selection(
+        selection2,
+        readers=default_image_node_reader_registry(),
+        enrichers=[],
+    )
+
+    imported = repository.assets_for_import("import-1")
+    common_asset_id = imported[0].asset_id
+
+    snapshots = repository.snapshots_for_asset(common_asset_id)
+    assert len(snapshots) == 2
+    import_ids = [s["import_id"] for s in snapshots]
+    assert "import-1" in import_ids
+    assert "import-2" in import_ids
+
+    snap2 = next(s for s in snapshots if s["import_id"] == "import-2")
+    assert snap2["source_type"] == "neev_playlist"
+    assert snap2["source_order"] == 5
+    assert snap2["display_name"] == "custom_title.png"
+    assert snap2["name"] == "playlist.nvpls"
+

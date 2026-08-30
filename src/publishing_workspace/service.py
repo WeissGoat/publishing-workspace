@@ -267,6 +267,7 @@ class PublishingService:
         strict: bool = False,
         legacy_tolerant: bool = False,
         retry_failed: bool = False,
+        tags: list[str] | None = None,
     ) -> ImportRunSummary:
         paths, config = load_workspace(root)
         return ImportWorkflowService(paths, config).import_source(
@@ -276,6 +277,41 @@ class PublishingService:
             strict=strict,
             legacy_tolerant=legacy_tolerant,
             retry_failed=retry_failed,
+            tags=tags,
+        )
+
+    def import_secondary(
+        self,
+        root: str | Path,
+        source: str | Path,
+        *,
+        tag: str | None = "二次筛选",
+        tags: list[str] | None = None,
+        input_type: str | None = None,
+        recursive: bool = False,
+        strict: bool = False,
+        legacy_tolerant: bool = False,
+        retry_failed: bool = False,
+    ) -> ImportRunSummary:
+        combined_tags: list[str] = []
+        if tags:
+            combined_tags.extend([str(t).strip() for t in tags if str(t).strip()])
+        elif tag:
+            clean_tag = str(tag).strip()
+            if clean_tag:
+                combined_tags.append(clean_tag)
+        else:
+            combined_tags.append("二次筛选")
+
+        return self.import_source(
+            root,
+            source,
+            input_type=input_type,
+            recursive=recursive,
+            strict=strict,
+            legacy_tolerant=legacy_tolerant,
+            retry_failed=retry_failed,
+            tags=combined_tags,
         )
 
     def resume_import(self, root: str | Path, run_id: str) -> ImportRunSummary:

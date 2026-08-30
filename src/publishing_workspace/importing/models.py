@@ -72,6 +72,7 @@ class ImportRunRecord(BaseModel):
     status: ImportRunStatus
     pipeline_stage: PipelineStage
     counters: ImportCounters = Field(default_factory=ImportCounters)
+    tags: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: dict[str, Any] | None = None
     created_at: str
@@ -119,6 +120,7 @@ class ImportRunSummary(BaseModel):
     held_problem_items: int
     unique_assets: int
     open_problems: int
+    tags: list[str] = Field(default_factory=list)
     reader_counts: dict[str, int] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     snapshot_path: str | None = None

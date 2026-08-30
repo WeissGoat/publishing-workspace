@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS imports (
     missing_items INTEGER NOT NULL DEFAULT 0,
     failed_items INTEGER NOT NULL DEFAULT 0,
     held_problem_items INTEGER NOT NULL DEFAULT 0,
+    tags_json TEXT NOT NULL DEFAULT '[]',
     warnings_json TEXT NOT NULL,
     error_json TEXT,
     created_at TEXT NOT NULL,

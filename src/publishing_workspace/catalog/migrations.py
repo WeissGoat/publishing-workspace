@@ -87,6 +87,7 @@ def _migrate_imports(connection: sqlite3.Connection) -> None:
             missing_items INTEGER NOT NULL DEFAULT 0,
             failed_items INTEGER NOT NULL DEFAULT 0,
             held_problem_items INTEGER NOT NULL DEFAULT 0,
+            tags_json TEXT NOT NULL DEFAULT '[]',
             warnings_json TEXT NOT NULL,
             error_json TEXT,
             created_at TEXT NOT NULL,
@@ -102,7 +103,7 @@ def _migrate_imports(connection: sqlite3.Connection) -> None:
             import_id, source_type, source_ref, source_fingerprint, mode, strict,
             status, pipeline_stage, total_items, planned_items, processed_items,
             reused_path_items, reused_content_items, parsed_new_items, missing_items,
-            failed_items, held_problem_items, warnings_json, error_json, created_at,
+            failed_items, held_problem_items, tags_json, warnings_json, error_json, created_at,
             started_at, updated_at, completed_at
         )
             SELECT
@@ -115,7 +116,7 @@ def _migrate_imports(connection: sqlite3.Connection) -> None:
                 {_legacy_count_sql("x.import_id=i.import_id AND x.status='imported'", has_items)},
                 {_legacy_count_sql("x.import_id=i.import_id AND x.status='missing'", has_items)},
                 {_legacy_count_sql("x.import_id=i.import_id AND x.status='failed'", has_items)},
-            0, i.warnings_json, NULL, i.created_at, i.created_at, i.created_at, i.created_at
+            0, '[]', i.warnings_json, NULL, i.created_at, i.created_at, i.created_at, i.created_at
         FROM imports_v1 i
         """
     )
