@@ -197,11 +197,14 @@ async def test_inpaint_service_cascades_to_tasks_and_exports(tmp_path: Path):
     paths, _, _ = init_workspace(tmp_path)
     catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
 
-    # 1. 导入初始绿色原图 (64x64) 并记录为快照 import-test
+    # 1. 导入初始绿色原图 (64x64) 并附带元数据，记录为快照 import-test
     source_dir = tmp_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     img_path = source_dir / "sample.png"
-    Image.new("RGB", (64, 64), "green").save(img_path)
+    from PIL.PngImagePlugin import PngInfo
+    p_info = PngInfo()
+    p_info.add_text("parameters", "1girl, akemi homura, master quality")
+    Image.new("RGB", (64, 64), "green").save(img_path, pnginfo=p_info)
 
     from publishing_workspace.models import SelectionSet, ImportedItem
     selection = SelectionSet(
@@ -306,5 +309,11 @@ async def test_inpaint_service_cascades_to_tasks_and_exports(tmp_path: Path):
     assert len(snapshot_assets) == 1
     assert snapshot_assets[0].asset_id == new_asset_id
     assert snapshot_assets[0].path == str(img_path)
+
+    # 8. 验证原图的 PNG 文本元数据已完整保留在重绘后的新图片中
+    from publishing_workspace.png_metadata import read_png_text_chunks
+    final_chunks = read_png_text_chunks(img_path)
+    assert "parameters" in final_chunks
+    assert "akemi homura" in final_chunks["parameters"]
 
 

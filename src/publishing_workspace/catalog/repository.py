@@ -110,13 +110,21 @@ class CatalogRepository:
         _INITIALIZED_CATALOGS.add(resolved_key)
 
     def _align_import_items_with_paths(self, connection: sqlite3.Connection) -> None:
-        """自动对齐并自愈 import_items 中的历史 asset_id 与当前物理文件 asset_paths。"""
+        """自动对齐并自愈 import_items 中的历史 asset_id 与当前物理文件 asset_paths，并补全业务节点。"""
         try:
             connection.execute(
                 "UPDATE import_items "
                 "SET asset_id = (SELECT ap.asset_id FROM asset_paths ap WHERE ap.path = import_items.resolved_path) "
                 "WHERE resolved_path IN (SELECT path FROM asset_paths WHERE available=1) "
                 "  AND (asset_id IS NULL OR asset_id != (SELECT ap.asset_id FROM asset_paths ap WHERE ap.path = import_items.resolved_path))"
+            )
+            # 补全重绘资产继承的历史业务节点（角色、动作组等）
+            connection.execute(
+                "INSERT OR IGNORE INTO asset_nodes (asset_id, role, node_index, node_id, ref) "
+                "SELECT al.new_asset_id, an.role, an.node_index, an.node_id, an.ref "
+                "FROM asset_aliases al "
+                "JOIN asset_nodes an ON an.asset_id = al.old_asset_id "
+                "WHERE al.new_asset_id NOT IN (SELECT DISTINCT asset_id FROM asset_nodes)"
             )
         except Exception as exc:
             logger.debug("对齐 import_items 历史 Hash 略过: %s", exc)

@@ -8,11 +8,19 @@ from pathlib import Path
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def read_png_text_chunks(path: str | Path) -> dict[str, str]:
+import io
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
+
+
+def read_png_text_chunks(path_or_data: str | Path | bytes) -> dict[str, str]:
     """读取 PNG 的 tEXt、zTXt 和 iTXt 文本块。"""
-    data = Path(path).read_bytes()
+    if isinstance(path_or_data, bytes):
+        data = path_or_data
+    else:
+        data = Path(path_or_data).read_bytes()
     if not data.startswith(PNG_SIGNATURE):
-        raise ValueError(f"不是 PNG 文件：{path}")
+        raise ValueError("不是 PNG 数据")
 
     chunks: dict[str, str] = {}
     offset = len(PNG_SIGNATURE)
@@ -33,6 +41,24 @@ def read_png_text_chunks(path: str | Path) -> dict[str, str]:
         elif chunk_type == b"IEND":
             break
     return chunks
+
+
+def embed_png_text_chunks(image_bytes: bytes, chunks: dict[str, str]) -> bytes:
+    """将文本元数据字典完整塞回 PNG 图片中，保留原图所有 ComfyUI/WebUI/NAI 参数。"""
+    if not chunks:
+        return image_bytes
+    try:
+        im = Image.open(io.BytesIO(image_bytes))
+        png_info = PngInfo()
+        for k, v in chunks.items():
+            if isinstance(k, str) and isinstance(v, str):
+                png_info.add_text(k, v)
+        
+        buf = io.BytesIO()
+        im.save(buf, format="PNG", pnginfo=png_info)
+        return buf.getvalue()
+    except Exception:
+        return image_bytes
 
 
 def _split_keyword_text(chunk_data: bytes) -> tuple[str, str]:

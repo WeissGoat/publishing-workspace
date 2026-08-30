@@ -287,12 +287,22 @@ class InpaintService:
         with Image.open(io.BytesIO(new_bytes)) as img:
             img.verify()
 
-        # 2. 原子覆写原图文件
+        # 2. 提取原图的文本元数据块并注入新图像素容器（保留 ComfyUI/WebUI/NAI 全套元数据参数）
+        from ..png_metadata import read_png_text_chunks, embed_png_text_chunks
+        if asset_path.suffix.casefold() == ".png" and asset_path.is_file():
+            try:
+                orig_chunks = read_png_text_chunks(asset_path)
+                if orig_chunks:
+                    new_bytes = embed_png_text_chunks(new_bytes, orig_chunks)
+            except Exception as exc:
+                logger.warning("提取并注入原图 PNG 元数据失败: %s", exc)
+
+        # 3. 原子覆写原图文件
         tmp_target = asset_path.with_name(f".{asset_path.name}.inpaint.{uuid.uuid4().hex[:8]}.tmp")
         tmp_target.write_bytes(new_bytes)
         os.replace(tmp_target, asset_path)
 
-        # 3. 重新 Ingest 进 Catalog
+        # 4. 重新 Ingest 进 Catalog
         stat = asset_path.stat()
         readers = default_image_node_reader_registry()
 
@@ -314,6 +324,14 @@ class InpaintService:
             conn.execute(
                 "UPDATE import_items SET asset_id=? WHERE resolved_path=? OR asset_id=?",
                 (new_asset_id, str(asset_path), asset_id),
+            )
+
+            # 继承并补全原图的业务节点（角色、动作组、画风等）
+            conn.execute(
+                "INSERT OR IGNORE INTO asset_nodes (asset_id, role, node_index, node_id, ref) "
+                "SELECT ?, role, node_index, node_id, ref "
+                "FROM asset_nodes WHERE asset_id=?",
+                (new_asset_id, asset_id),
             )
 
         # 4. 迁移历史标记并持久化别名映射（向后兼容任何旧 hash 引用）
