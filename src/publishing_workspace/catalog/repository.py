@@ -591,19 +591,27 @@ class CatalogRepository:
         if not asset_id:
             return []
         with self.connection() as connection:
-            rows = connection.execute(
-                "SELECT "
-                "  i.import_id, i.source_type, i.source_ref, i.mode, i.status AS import_status, "
-                "  i.total_items, i.tags_json, i.created_at AS import_created_at, "
-                "  ii.source_order, ii.source_path, ii.resolved_path, ii.display_name, "
-                "  ii.decision, ii.status AS item_status "
-                "FROM import_items ii "
-                "JOIN imports i ON i.import_id = ii.import_id "
-                "WHERE ii.asset_id = ? "
-                "   OR ii.resolved_path = (SELECT path FROM asset_paths WHERE asset_id = ?) "
-                "ORDER BY i.created_at DESC, ii.source_order ASC",
-                (asset_id, asset_id),
-            ).fetchall()
+            return self._snapshots_for_asset_in_conn(connection, asset_id)
+
+    def _snapshots_for_asset_in_conn(
+        self,
+        connection: sqlite3.Connection,
+        asset_id: str,
+    ) -> list[dict[str, Any]]:
+        """在已有连接内查询指定素材出现过的所有快照。"""
+        rows = connection.execute(
+            "SELECT "
+            "  i.import_id, i.source_type, i.source_ref, i.mode, i.status AS import_status, "
+            "  i.total_items, i.tags_json, i.created_at AS import_created_at, "
+            "  ii.source_order, ii.source_path, ii.resolved_path, ii.display_name, "
+            "  ii.decision, ii.status AS item_status "
+            "FROM import_items ii "
+            "JOIN imports i ON i.import_id = ii.import_id "
+            "WHERE ii.asset_id = ? "
+            "   OR ii.resolved_path = (SELECT path FROM asset_paths WHERE asset_id = ?) "
+            "ORDER BY i.created_at DESC, ii.source_order ASC",
+            (asset_id, asset_id),
+        ).fetchall()
 
         results: list[dict[str, Any]] = []
         for r in rows:
@@ -630,6 +638,18 @@ class CatalogRepository:
                 "created_at": r["import_created_at"],
             })
         return results
+
+    def batch_snapshots_for_assets(
+        self,
+        asset_ids: Collection[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """批量查询多个资产的快照信息，共享单次连接。"""
+        result: dict[str, list[dict[str, Any]]] = {}
+        with self.connection() as connection:
+            for aid in asset_ids:
+                if aid:
+                    result[aid] = self._snapshots_for_asset_in_conn(connection, aid)
+        return result
 
     def related_assets_for_asset(
         self,
@@ -699,10 +719,11 @@ class CatalogRepository:
                     candidates_by_id[cand_id] = (idx, cand_name, r["resolved_path"] or "")
 
             cand_assets = self.assets_by_ids(list(candidates_by_id.keys())) if candidates_by_id else {}
+            batch_snaps = self.batch_snapshots_for_assets(list(candidates_by_id.keys())) if candidates_by_id else {}
             for cand_id, (idx, cand_name, r_path) in sorted(candidates_by_id.items(), key=lambda x: x[1][0]):
                 cand_rec = cand_assets.get(cand_id)
                 seen_asset_ids.add(cand_id)
-                snaps = self.snapshots_for_asset(cand_id)
+                snaps = batch_snaps.get(cand_id, [])
                 same_batch_items.append({
                     "asset_id": cand_id,
                     "display_name": cand_name,
@@ -737,6 +758,7 @@ class CatalogRepository:
             cand_ids = [r["asset_id"] for r in cand_seed_rows if r["asset_id"] not in seen_asset_ids]
             if cand_ids:
                 cand_records = self.assets_by_ids(cand_ids[:50])
+                batch_snaps = self.batch_snapshots_for_assets(list(cand_records.keys()))
                 for cand_id, cand_rec in cand_records.items():
                     if cand_id in seen_asset_ids:
                         continue
@@ -746,7 +768,7 @@ class CatalogRepository:
                         cand_seed = str(cand_meta.get("seed") or "").strip()
                     if cand_seed and cand_seed == target_seed_str:
                         seen_asset_ids.add(cand_id)
-                        snaps = self.snapshots_for_asset(cand_id)
+                        snaps = batch_snaps.get(cand_id, [])
                         same_seed_items.append({
                             "asset_id": cand_id,
                             "display_name": cand_rec.display_name or Path(cand_rec.path).name,
@@ -813,12 +835,13 @@ class CatalogRepository:
             if top_adjacent:
                 top_adj_ids = [x[1] for x in top_adjacent]
                 cand_records = self.assets_by_ids(top_adj_ids)
+                batch_snaps = self.batch_snapshots_for_assets(top_adj_ids)
                 for diff_sec, cand_id, cand_mtime in top_adjacent:
                     cand_rec = cand_records.get(cand_id)
                     if not cand_rec:
                         continue
                     seen_asset_ids.add(cand_id)
-                    snaps = self.snapshots_for_asset(cand_id)
+                    snaps = batch_snaps.get(cand_id, [])
                     diff_min = max(1, round(diff_sec / 60))
                     time_label = f"相隔 ~{diff_min} 分钟" if diff_min > 0 else "同会话生图"
                     time_adjacent_items.append({
@@ -894,49 +917,68 @@ class CatalogRepository:
             return asset_id
         with self.connection() as connection:
             self._ensure_asset_aliases_table(connection)
-            current = asset_id
-            visited = {current}
-            while True:
-                row = connection.execute(
-                    "SELECT new_asset_id FROM asset_aliases WHERE old_asset_id=?",
-                    (current,),
-                ).fetchone()
-                if row and row["new_asset_id"]:
-                    nxt = str(row["new_asset_id"])
-                    if nxt in visited:
-                        break
-                    visited.add(nxt)
-                    current = nxt
-                else:
-                    break
+            return self._resolve_asset_id_in_conn(connection, asset_id)
 
-            # 自动自愈历史重绘别名：若当前 ID 在 asset_paths 中无有效路径，尝试从 import_items 查找物理文件并关联当前最新 asset_id
-            path_exists = connection.execute(
-                "SELECT 1 FROM asset_paths WHERE asset_id=? LIMIT 1", (current,)
+    def _resolve_asset_id_in_conn(self, connection: sqlite3.Connection, asset_id: str) -> str:
+        """在已有连接内解析资产别名链。"""
+        current = asset_id
+        visited = {current}
+        while True:
+            row = connection.execute(
+                "SELECT new_asset_id FROM asset_aliases WHERE old_asset_id=?",
+                (current,),
             ).fetchone()
-            if path_exists is None:
-                imp_row = connection.execute(
-                    "SELECT resolved_path FROM import_items WHERE asset_id=? ORDER BY rowid DESC LIMIT 1",
-                    (current,),
-                ).fetchone()
-                if imp_row and imp_row["resolved_path"]:
-                    r_path = Path(imp_row["resolved_path"])
-                    if r_path.is_file():
-                        path_key = normalize_path_key(r_path)
-                        cur_row = connection.execute(
-                            "SELECT asset_id FROM asset_paths WHERE path_key=? OR path=?",
-                            (path_key, str(r_path)),
-                        ).fetchone()
-                        if cur_row and cur_row["asset_id"] and cur_row["asset_id"] != current:
-                            discovered_id = str(cur_row["asset_id"])
-                            connection.execute(
-                                "INSERT INTO asset_aliases(old_asset_id, new_asset_id, path, created_at) "
-                                "VALUES (?, ?, ?, ?) "
-                                "ON CONFLICT(old_asset_id) DO UPDATE SET new_asset_id=excluded.new_asset_id, path=excluded.path",
-                                (current, discovered_id, str(r_path), utc_now_iso()),
-                            )
-                            current = discovered_id
-            return current
+            if row and row["new_asset_id"]:
+                nxt = str(row["new_asset_id"])
+                if nxt in visited:
+                    break
+                visited.add(nxt)
+                current = nxt
+            else:
+                break
+
+        # 自动自愈历史重绘别名
+        path_exists = connection.execute(
+            "SELECT 1 FROM asset_paths WHERE asset_id=? LIMIT 1", (current,)
+        ).fetchone()
+        if path_exists is None:
+            imp_row = connection.execute(
+                "SELECT resolved_path FROM import_items WHERE asset_id=? ORDER BY rowid DESC LIMIT 1",
+                (current,),
+            ).fetchone()
+            if imp_row and imp_row["resolved_path"]:
+                r_path = Path(imp_row["resolved_path"])
+                if r_path.is_file():
+                    path_key = normalize_path_key(r_path)
+                    cur_row = connection.execute(
+                        "SELECT asset_id FROM asset_paths WHERE path_key=? OR path=?",
+                        (path_key, str(r_path)),
+                    ).fetchone()
+                    if cur_row and cur_row["asset_id"] and cur_row["asset_id"] != current:
+                        discovered_id = str(cur_row["asset_id"])
+                        connection.execute(
+                            "INSERT INTO asset_aliases(old_asset_id, new_asset_id, path, created_at) "
+                            "VALUES (?, ?, ?, ?) "
+                            "ON CONFLICT(old_asset_id) DO UPDATE SET new_asset_id=excluded.new_asset_id, path=excluded.path",
+                            (current, discovered_id, str(r_path), utc_now_iso()),
+                        )
+                        current = discovered_id
+        return current
+
+    def batch_resolve_asset_ids(
+        self,
+        asset_ids: Collection[str],
+    ) -> dict[str, str]:
+        """批量解析资产别名，共享单次连接，避免 N+1 查询。"""
+        result: dict[str, str] = {}
+        if not asset_ids:
+            return result
+        with self.connection() as connection:
+            self._ensure_asset_aliases_table(connection)
+            for aid in asset_ids:
+                if aid:
+                    result[aid] = self._resolve_asset_id_in_conn(connection, aid)
+        return result
 
     def _ensure_asset_aliases_table(self, connection: sqlite3.Connection) -> None:
         connection.execute(
@@ -964,8 +1006,10 @@ class CatalogRepository:
 
         with self.connection() as connection:
             self._ensure_asset_aliases_table(connection)
-            # 解析所有请求 ID 的最新别名
-            id_mapping: dict[str, str] = {aid: self.resolve_asset_id(aid) for aid in requested}
+            # 批量解析所有请求 ID 的最新别名（共享连接，避免 N+1）
+            id_mapping: dict[str, str] = {
+                aid: self._resolve_asset_id_in_conn(connection, aid) for aid in requested
+            }
             all_lookup_ids = list(dict.fromkeys(list(requested) + list(id_mapping.values())))
 
             source_rows: dict[str, sqlite3.Row] = {}
@@ -1103,7 +1147,6 @@ class CatalogRepository:
     def list_imports_summary(self, *, deduplicate_sources: bool = True) -> list[dict[str, Any]]:
         """返回已导入快照详情列表（按创建时间倒序排），默认按同源图集归并，供前端与 API 交互选择使用。"""
         with self.connection() as connection:
-            self._ensure_imports_tags_column(connection)
             rows = connection.execute(
                 "SELECT import_id, source_type, source_ref, total_items, tags_json, created_at, status "
                 "FROM imports ORDER BY rowid DESC"
@@ -1211,7 +1254,7 @@ class CatalogRepository:
     def get_asset_path(self, asset_id: str) -> str | None:
         """快速获取资产文件绝对路径，优先命中内存缓存，极速响应预览流。"""
         cached = _GLOBAL_ASSET_PATH_CACHE.get(asset_id)
-        if cached is not None and Path(cached).is_file():
+        if cached is not None:
             return cached
         with self.connection() as connection:
             row = connection.execute(
@@ -1370,6 +1413,7 @@ class CatalogRepository:
                 "path": str(preferred_path),
                 "size": stat.st_size,
                 "modified_ns": stat.st_mtime_ns,
+                "available": 1,
             }
         elif path_row is None:
             raise KeyError(f"Catalog 中找不到资产可用路径：{asset_id}")

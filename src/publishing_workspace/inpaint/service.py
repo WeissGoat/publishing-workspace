@@ -76,7 +76,11 @@ def _sync_inpainted_asset_to_tasks(
     asset_name: str,
     new_bytes: bytes,
 ) -> int:
-    """Sync the updated inpaint image bytes and asset ID across all tasks in workspace."""
+    """Sync the updated inpaint image bytes and asset ID across all tasks in workspace.
+
+    Optimized: checks submission.yaml first to skip unrelated tasks entirely,
+    avoiding full directory scans and SHA256 comparisons on every file.
+    """
     if not paths.tasks.is_dir():
         return 0
 
@@ -93,53 +97,55 @@ def _sync_inpainted_asset_to_tasks(
         task_paths = TaskPaths(paths, task_dir.name)
         task_touched = False
 
-        # 1. 检查并更新 selections/all, post, cover 中的对应图片文件
-        for sel_name, sel_dir in task_paths.selection_dirs.items():
-            if not sel_dir.is_dir():
-                continue
-            for file_path in sel_dir.iterdir():
-                if not file_path.is_file() or file_path.name.startswith("."):
-                    continue
-
-                # 匹配策略：同名、带序号前缀 (如 0001_sample.png)、或哈希与 old_asset_id 一致
-                is_match = (
-                    file_path.name == asset_name
-                    or file_path.name.endswith(f"_{asset_name}")
-                )
-                if not is_match and old_sha:
-                    try:
-                        f_sha = _sha256_file(file_path).lower()
-                        if f_sha == old_sha:
-                            is_match = True
-                    except Exception:
-                        pass
-
-                if is_match:
-                    try:
-                        tmp_file = file_path.with_name(f".{file_path.name}.inpaint.{uuid.uuid4().hex[:8]}.tmp")
-                        tmp_file.write_bytes(new_bytes)
-                        os.replace(tmp_file, file_path)
-                        task_touched = True
-                    except Exception as exc:
-                        logger.warning("同步更新任务图片失败: %s - %s", file_path, exc)
-
-        # 2. 检查并更新 submission.yaml 中引用的 asset_id
+        # 快速路径：先检查 submission.yaml 是否引用了 old_asset_id
+        # 如果没有引用，跳过该任务的 selection 文件扫描
+        has_reference = False
         if task_paths.submission_yaml.is_file():
             try:
                 submission = SubmissionRepository.load(task_paths)
-                sub_modified = False
                 for set_name in ("all", "post", "cover"):
-                    id_list = getattr(submission.sets, set_name, None)
+                    id_list = submission.sets.get(set_name)
                     if isinstance(id_list, list) and old_asset_id in id_list:
+                        has_reference = True
+                        # 更新 submission.yaml 中的 asset_id 引用
                         new_list = [new_asset_id if aid == old_asset_id else aid for aid in id_list]
-                        setattr(submission.sets, set_name, new_list)
-                        sub_modified = True
+                        submission.sets[set_name] = new_list
 
-                if sub_modified:
+                if has_reference:
                     SubmissionRepository.save(task_paths, submission)
                     task_touched = True
             except Exception as exc:
                 logger.warning("更新任务 submission.yaml 引用失败: %s - %s", task_paths.task_id, exc)
+
+        # 仅对有引用的任务执行 selection 文件更新
+        if has_reference:
+            for sel_name, sel_dir in task_paths.selection_dirs.items():
+                if not sel_dir.is_dir():
+                    continue
+                for file_path in sel_dir.iterdir():
+                    if not file_path.is_file() or file_path.name.startswith("."):
+                        continue
+
+                    is_match = (
+                        file_path.name == asset_name
+                        or file_path.name.endswith(f"_{asset_name}")
+                    )
+                    if not is_match and old_sha:
+                        try:
+                            f_sha = _sha256_file(file_path).lower()
+                            if f_sha == old_sha:
+                                is_match = True
+                        except Exception:
+                            pass
+
+                    if is_match:
+                        try:
+                            tmp_file = file_path.with_name(f".{file_path.name}.inpaint.{uuid.uuid4().hex[:8]}.tmp")
+                            tmp_file.write_bytes(new_bytes)
+                            os.replace(tmp_file, file_path)
+                            task_touched = True
+                        except Exception as exc:
+                            logger.warning("同步更新任务图片失败: %s - %s", file_path, exc)
 
         if task_touched:
             updated_tasks += 1
@@ -238,7 +244,8 @@ class InpaintService:
             if i < count - 1:
                 await asyncio.sleep(0.3)
 
-        # 保存 session 元数据
+        # 保存 session 元数据与 mask
+        (session_dir / "mask.png").write_bytes(mask_bytes)
         session_meta = {
             "session_id": session_id,
             "asset_id": asset_id,
@@ -247,6 +254,7 @@ class InpaintService:
             "negative_prompt": final_negative,
             "strength": strength,
             "model": model,
+            "mask_file": "mask.png",
             "candidates": [c.model_dump() for c in candidates],
         }
         (session_dir / "session.json").write_text(json.dumps(session_meta, ensure_ascii=False, indent=2), encoding="utf-8")
