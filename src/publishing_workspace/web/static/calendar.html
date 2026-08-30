@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 月度计划</title>
-  <link rel="stylesheet" href="/calendar.css?v=20260824-39">
+  <link rel="stylesheet" href="/calendar.css?v=20260828-04">
 </head>
 <body>
   <main class="app-shell">
@@ -28,6 +28,34 @@
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
     <section class="workspace-layout">
+      <!-- 左侧：未排期投稿列表 -->
+      <aside class="panel unscheduled-panel">
+        <div class="panel-heading unscheduled-heading">
+          <div>
+            <p class="eyebrow">Unscheduled</p>
+            <div class="unscheduled-title-row">
+              <h2>待排期投稿</h2>
+              <span id="unscheduled-count-badge" class="unscheduled-count-badge">0</span>
+            </div>
+          </div>
+          <button id="refresh-unscheduled-btn" class="icon-button compact-btn" type="button" title="刷新列表" aria-label="刷新待排期列表">&#8635;</button>
+        </div>
+
+        <div class="unscheduled-filter-bar">
+          <input id="unscheduled-search-input" type="search" class="field-control compact-search" placeholder="🔍 搜索待排期投稿...">
+        </div>
+
+        <div id="unscheduled-list" class="unscheduled-list">
+          <div class="unscheduled-empty">加载中...</div>
+        </div>
+
+        <div class="unscheduled-footer">
+          <a href="/library" class="text-button unscheduled-library-link">
+            <span>+ 去素材库新建投稿 &rarr;</span>
+          </a>
+        </div>
+      </aside>
+
       <section class="calendar-panel panel">
         <div class="panel-heading calendar-heading">
           <div>
@@ -78,6 +106,23 @@
               <span>进入素材库编辑投稿素材 &rarr;</span>
             </a>
           </div>
+
+          <!-- 排期发布选项 -->
+          <div class="calendar-form-publish-box">
+            <label class="schedule-publish-toggle-label" title="开启后，到期由后端自动将该关联投稿上传发布到 Pixiv">
+              <input type="checkbox" id="entry-publish-checkbox">
+              <span>⏰ 到期自动发布到 Pixiv</span>
+            </label>
+            <div id="entry-delay-options-row" class="calendar-delay-options-row hidden">
+              <label class="schedule-delay-toggle-label" title="默认严格准时投稿。若勾选，服务重启或维护后发现已过定时时间但处于容差时间内依然会自动补发">
+                <input type="checkbox" id="entry-allow-delay-checkbox">
+                <span>允许延迟 (容差</span>
+              </label>
+              <input type="number" id="entry-delay-minutes-input" class="field-control compact-delay-input" value="240" min="1" max="1440" style="width:50px;height:22px;padding:2px 4px;text-align:center;font-size:11px;">
+              <span style="font-size:11px;color:#64748b;">分钟)</span>
+            </div>
+          </div>
+
           <div class="form-actions">
             <button id="save-entry" class="primary-button" type="submit" disabled>保存排期</button>
             <button id="delete-entry" class="danger-button" type="button" disabled>删除</button>
@@ -92,10 +137,10 @@
               <span class="detail-badge-pill">投稿详情</span>
               <h3 id="detail-task-title" class="detail-task-title"></h3>
             </div>
-            <div class="detail-header-actions" style="display:inline-flex;align-items:center;gap:8px;">
-              <button id="detail-delete-submission-btn" class="danger-button compact-button" type="button" title="彻底删除此投稿任务">🗑️ 删除投稿</button>
+            <div class="detail-header-actions" style="display:inline-flex;align-items:center;gap:6px;">
+              <button id="detail-delete-submission-btn" class="danger-button compact-button" type="button" title="彻底删除此投稿任务">🗑️ 删除</button>
               <a id="detail-open-library-btn" href="#" class="detail-action-link" title="在素材库中打开与编辑">
-                <span>进入素材库</span> &rarr;
+                <span>素材库</span> &rarr;
               </a>
             </div>
           </div>
@@ -104,6 +149,26 @@
             <span id="detail-task-id" class="detail-id-tag"></span>
             <span id="detail-export-status" class="detail-status-tag">未导出</span>
             <span id="detail-pixiv-status" class="detail-status-tag pixiv-published hidden"></span>
+          </div>
+
+          <!-- Pixiv 定时与发布面板 -->
+          <div id="detail-pixiv-schedule-box" class="detail-pixiv-box">
+            <div class="detail-pixiv-header">
+              <span class="detail-pixiv-title">🎨 Pixiv 自动发布与定时管理</span>
+            </div>
+            <div class="detail-pixiv-actions-row">
+              <button id="detail-publish-to-pixiv-btn" class="primary-button compact-button" type="button" title="立即上传发布到 Pixiv">🚀 立即发布</button>
+              <button id="detail-schedule-pixiv-btn" class="secondary-button compact-button" type="button" title="开启/取消定时自动发布">⏰ 开启定时发布</button>
+            </div>
+            <div class="detail-schedule-options-row">
+              <label class="schedule-delay-toggle-label" title="默认严格准时投稿。勾选后若服务重启/维护时在容差时间内依然会自动补发">
+                <input type="checkbox" id="detail-schedule-allow-delay-checkbox">
+                <span>允许延迟补发 (容差</span>
+              </label>
+              <input type="number" id="detail-schedule-delay-minutes-input" class="field-control compact-delay-input" value="240" min="1" max="1440" style="width:52px;height:22px;padding:2px 4px;text-align:center;font-size:11px;">
+              <span style="font-size:11px;color:#64748b;">分钟)</span>
+            </div>
+            <div id="detail-pixiv-schedule-status" class="pixiv-schedule-status-box hidden"></div>
           </div>
 
           <!-- 1. 选集素材预览 -->
@@ -179,6 +244,6 @@
     </div>
   </dialog>
 
-  <script src="/calendar.js?v=20260824-39" defer></script>
+  <script src="/calendar.js?v=20260828-04" defer></script>
 </body>
 </html>

@@ -7,6 +7,9 @@
     submissions: [],
     selectedEntryId: null,
     draggedEntryId: null,
+    draggedUnscheduledTaskId: null,
+    selectedUnscheduledTaskId: null,
+    unscheduledSearchQuery: "",
     currentDetail: null,
     currentDetailTab: "all",
     currentBuildTab: "all",
@@ -25,6 +28,10 @@
     nextMonth: document.getElementById("next-month"),
     planStatus: document.getElementById("plan-status"),
     notice: document.getElementById("notice"),
+    unscheduledList: document.getElementById("unscheduled-list"),
+    unscheduledCountBadge: document.getElementById("unscheduled-count-badge"),
+    unscheduledSearchInput: document.getElementById("unscheduled-search-input"),
+    refreshUnscheduledBtn: document.getElementById("refresh-unscheduled-btn"),
     calendarTitle: document.getElementById("calendar-title"),
     calendarSubtitle: document.getElementById("calendar-subtitle"),
     calendarGrid: document.getElementById("calendar-grid"),
@@ -41,6 +48,10 @@
     convertLegacyLink: document.getElementById("convert-legacy-link"),
     taskLinkBox: document.getElementById("task-link-box"),
     gotoLibraryLink: document.getElementById("goto-library-link"),
+    entryPublishCheckbox: document.getElementById("entry-publish-checkbox"),
+    entryDelayOptionsRow: document.getElementById("entry-delay-options-row"),
+    entryAllowDelayCheckbox: document.getElementById("entry-allow-delay-checkbox"),
+    entryDelayMinutesInput: document.getElementById("entry-delay-minutes-input"),
     saveEntryBtn: document.getElementById("save-entry"),
     deleteEntryBtn: document.getElementById("delete-entry"),
 
@@ -50,6 +61,12 @@
     detailTaskId: document.getElementById("detail-task-id"),
     detailExportStatus: document.getElementById("detail-export-status"),
     detailPixivStatus: document.getElementById("detail-pixiv-status"),
+    detailPixivBox: document.getElementById("detail-pixiv-schedule-box"),
+    detailPublishToPixivBtn: document.getElementById("detail-publish-to-pixiv-btn"),
+    detailSchedulePixivBtn: document.getElementById("detail-schedule-pixiv-btn"),
+    detailScheduleAllowDelayCheckbox: document.getElementById("detail-schedule-allow-delay-checkbox"),
+    detailScheduleDelayMinutesInput: document.getElementById("detail-schedule-delay-minutes-input"),
+    detailPixivScheduleStatus: document.getElementById("detail-pixiv-schedule-status"),
     detailOpenLibraryBtn: document.getElementById("detail-open-library-btn"),
     detailDeleteSubmissionBtn: document.getElementById("detail-delete-submission-btn"),
     detailCountAll: document.getElementById("detail-count-all"),
@@ -150,6 +167,7 @@
         state.submissions = await res.json();
         updateTaskOptions();
         renderCalendarGrid();
+        renderUnscheduledList();
       }
     } catch (err) {
       console.warn("加载投稿列表失败", err);
@@ -184,11 +202,15 @@
         throw new Error(`加载计划失败 (${res.status})`);
       }
       state.plan = await res.json();
+      if (Array.isArray(state.plan.entries)) {
+        state.plan.entries.sort((a, b) => (a.scheduled_at || "").localeCompare(b.scheduled_at || ""));
+      }
       elements.calendarSubtitle.textContent = state.plan.timezone || "Asia/Shanghai";
       elements.planStatus.textContent = state.plan.status === "locked" ? "已锁定" : "草稿";
       elements.planStatus.className = `status-badge ${state.plan.status === "locked" ? "locked" : ""}`;
       elements.newEntryBtn.disabled = state.plan.status === "locked";
       renderCalendarGrid();
+      renderUnscheduledList();
       resetEditor();
     } catch (err) {
       showNotice(err.message, "error");
@@ -227,6 +249,10 @@
       const dateStr = `${state.month}-${dayStr}`;
       const cell = document.createElement("div");
       cell.className = "calendar-cell";
+      const dayOfWeek = (startDayOfWeek + day - 1) % 7;
+      if (dayOfWeek === 5 || dayOfWeek === 6) {
+        cell.classList.add("weekend-cell");
+      }
       if (dateStr === todayStr) {
         cell.classList.add("today");
       }
@@ -236,7 +262,7 @@
 
       // 拖拽目的地事件
       cell.addEventListener("dragover", (e) => {
-        if (state.draggedEntryId && state.plan.status !== "locked") {
+        if ((state.draggedEntryId || state.draggedUnscheduledTaskId) && state.plan?.status !== "locked") {
           e.preventDefault();
           cell.classList.add("drag-over");
         }
@@ -244,11 +270,15 @@
       cell.addEventListener("dragleave", () => {
         cell.classList.remove("drag-over");
       });
-      cell.addEventListener("drop", (e) => {
+      cell.addEventListener("drop", async (e) => {
         e.preventDefault();
         cell.classList.remove("drag-over");
-        if (state.draggedEntryId && state.plan.status !== "locked") {
+        if (!state.plan || state.plan.status === "locked") return;
+
+        if (state.draggedEntryId) {
           handleEntryMove(state.draggedEntryId, dateStr);
+        } else if (state.draggedUnscheduledTaskId) {
+          await handleScheduleUnscheduledTask(state.draggedUnscheduledTaskId, dateStr);
         }
       });
 
@@ -260,15 +290,25 @@
       });
 
       const entriesContainer = cell.querySelector(".cell-entries");
-      const dayEntries = (state.plan.entries || []).filter((e) => {
-        return e.scheduled_at && e.scheduled_at.startsWith(dateStr);
-      });
+      const dayEntries = (state.plan.entries || [])
+        .filter((e) => e.scheduled_at && e.scheduled_at.startsWith(dateStr))
+        .sort((a, b) => (a.scheduled_at || "").localeCompare(b.scheduled_at || ""));
 
       for (const entry of dayEntries) {
         const card = createEntryCard(entry);
         entriesContainer.appendChild(card);
       }
 
+      elements.calendarGrid.appendChild(cell);
+    }
+
+    // 填充下月初几天补齐整周 (7的倍数)
+    const totalRendered = startDayOfWeek + daysInMonth;
+    const remainingCells = (7 - (totalRendered % 7)) % 7;
+    for (let i = 1; i <= remainingCells; i++) {
+      const cell = document.createElement("div");
+      cell.className = "calendar-cell other-month";
+      cell.innerHTML = `<div class="cell-header"><span class="cell-day">${i}</span></div>`;
       elements.calendarGrid.appendChild(cell);
     }
   }
@@ -284,8 +324,6 @@
     const isTask = entry.content && entry.content.kind === "task";
     const isInline = entry.content && entry.content.kind === "inline_selection";
 
-    let badgeText = isTask ? "task" : "散图";
-    let badgeClass = isInline ? "entry-badge legacy" : "entry-badge";
     let countText = "";
     let pixivBadge = "";
 
@@ -295,9 +333,20 @@
         countText = `${sub.counts.all || sub.counts.post || 0}图`;
       }
       if (sub && sub.pixiv && sub.pixiv.illust_id) {
-        pixivBadge = `<span class="entry-badge pixiv-published" title="已发布到 Pixiv (PID: ${sub.pixiv.illust_id})">✓ PID ${sub.pixiv.illust_id}</span>`;
+        card.classList.add("is-published");
+        const pubTimeTooltip = sub.pixiv.published_at ? `\n实际发布时间: ${formatPublishedAt(sub.pixiv.published_at)}` : "";
+        pixivBadge = `<span class="entry-badge pixiv-published" title="已发布到 Pixiv (PID: ${sub.pixiv.illust_id})${pubTimeTooltip}">✓ Pixiv</span>`;
+      } else if (entry.execution && entry.execution.publish) {
+        card.classList.add("is-scheduled");
+        pixivBadge = `<span class="entry-badge pixiv-scheduled" title="已开启定时自动发布 Pixiv">⏰ 定时</span>`;
+      } else {
+        card.classList.add("is-draft");
       }
     } else if (isInline && entry.content.sets) {
+      card.classList.add("is-legacy");
+      if (entry.execution && entry.execution.publish) {
+        pixivBadge = `<span class="entry-badge pixiv-scheduled" title="已开启定时自动发布 Pixiv">⏰ 定时</span>`;
+      }
       const allLen = (entry.content.sets.all || entry.content.sets.post || []).length;
       countText = `${allLen}图`;
     }
@@ -308,14 +357,25 @@
       if (match) timeStr = match[1];
     }
 
+    const metaBadges = [];
+    if (timeStr) {
+      metaBadges.push(`<span class="entry-card-time">${timeStr}</span>`);
+    }
+    if (isInline) {
+      metaBadges.push(`<span class="entry-badge legacy">散图</span>`);
+    }
+    if (countText) {
+      metaBadges.push(`<span class="entry-count-tag">${countText}</span>`);
+    }
+    if (pixivBadge) {
+      metaBadges.push(pixivBadge);
+    }
+
     card.innerHTML = `
       <div class="entry-card-info">
-        <div class="entry-card-title">${escapeHtml(entry.title)}</div>
+        <div class="entry-card-title" title="${escapeHtml(entry.title)}">${escapeHtml(entry.title)}</div>
         <div class="entry-card-meta">
-          <span class="entry-card-time">${timeStr}</span>
-          <span class="${badgeClass}">${badgeText}</span>
-          ${countText ? `<span class="entry-count-tag">${countText}</span>` : ""}
-          ${pixivBadge}
+          ${metaBadges.join("")}
         </div>
       </div>
     `;
@@ -374,8 +434,153 @@
     }
   }
 
+  async function handleScheduleUnscheduledTask(taskId, dateStr) {
+    const sub = state.submissions.find((s) => s.task_id === taskId);
+    if (!sub || !state.plan || state.plan.status === "locked") return;
+
+    const targetEntryId = `entry-${taskId}`;
+    const scheduledAt = `${dateStr}T20:00:00+08:00`;
+    const payload = {
+      revision: state.plan.revision,
+      entry: {
+        entry_id: targetEntryId,
+        scheduled_at: scheduledAt,
+        title: sub.title || taskId,
+        content: { kind: "task", task_id: taskId },
+        execution: { build_on_due: true, notify_on_complete: true, publish: false },
+      },
+    };
+
+    try {
+      const res = await fetch(`/api/plans/${state.month}/entries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail?.message || data.detail || `排期失败 (${res.status})`);
+      }
+      showNotice(`🎉 已成功将【${sub.title || taskId}】安排在 ${dateStr} 20:00`, "info");
+      await loadPlan(state.month);
+      await loadSubmissionsList();
+    } catch (err) {
+      showNotice(`排期失败: ${err.message}`, "error");
+    } finally {
+      state.draggedUnscheduledTaskId = null;
+    }
+  }
+
+  function renderUnscheduledList() {
+    if (!elements.unscheduledList) return;
+    const query = (state.unscheduledSearchQuery || "").trim().toLowerCase();
+
+    // 过滤出未排期的投稿（没有 scheduled_entries 或者 scheduled_entries 为空）
+    const unscheduled = (state.submissions || []).filter((sub) => {
+      const isUnscheduled = !sub.scheduled_entries || sub.scheduled_entries.length === 0;
+      if (!isUnscheduled) return false;
+      if (!query) return true;
+      const titleMatch = (sub.title || "").toLowerCase().includes(query);
+      const idMatch = (sub.task_id || "").toLowerCase().includes(query);
+      return titleMatch || idMatch;
+    });
+
+    if (elements.unscheduledCountBadge) {
+      elements.unscheduledCountBadge.textContent = String(unscheduled.length);
+    }
+
+    elements.unscheduledList.innerHTML = "";
+    if (unscheduled.length === 0) {
+      elements.unscheduledList.innerHTML = `
+        <div class="unscheduled-empty">
+          ${query ? "未找到匹配的待排期投稿" : "🎉 所有投稿均已安排排期"}
+        </div>
+      `;
+      return;
+    }
+
+    for (const sub of unscheduled) {
+      const card = document.createElement("div");
+      card.className = `unscheduled-card ${state.selectedUnscheduledTaskId === sub.task_id ? "active" : ""}`;
+      card.draggable = state.plan?.status !== "locked";
+      card.dataset.taskId = sub.task_id;
+
+      const count = sub.counts && typeof sub.counts.all === "number" ? `${sub.counts.all}图` : "";
+      let pixivBadgeHtml = "";
+      if (sub.pixiv?.illust_id) {
+        pixivBadgeHtml = `<span class="unscheduled-tag pixiv" title="PID: ${sub.pixiv.illust_id}">✓ Pixiv</span>`;
+      } else {
+        pixivBadgeHtml = `<span class="unscheduled-tag unpub">未发布</span>`;
+      }
+
+      card.innerHTML = `
+        <div class="unscheduled-card-header">
+          <div class="unscheduled-card-title" title="${escapeHtml(sub.title || sub.task_id)}">
+            ${escapeHtml(sub.title || sub.task_id)}
+          </div>
+          <div class="unscheduled-card-actions">
+            <button class="unscheduled-assign-btn" type="button" title="载入排期表单">排期 &rarr;</button>
+          </div>
+        </div>
+        <div class="unscheduled-card-meta">
+          <span class="unscheduled-tag count">${count || "0图"}</span>
+          ${pixivBadgeHtml}
+          <span class="unscheduled-tag unpub">未排期</span>
+        </div>
+        <div class="unscheduled-drag-hint">
+          <span>🖐️ 拖拽至右侧日历快速排期</span>
+        </div>
+      `;
+
+      // 拖拽事件
+      card.addEventListener("dragstart", (e) => {
+        if (state.plan?.status === "locked") return;
+        state.draggedUnscheduledTaskId = sub.task_id;
+        state.draggedEntryId = null;
+        card.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "copyMove";
+        e.dataTransfer.setData("text/plain", JSON.stringify({ type: "unscheduled_task", taskId: sub.task_id }));
+      });
+
+      card.addEventListener("dragend", () => {
+        card.classList.remove("dragging");
+        state.draggedUnscheduledTaskId = null;
+      });
+
+      // 点击卡片：选中并载入排期表单与预览
+      card.addEventListener("click", () => {
+        selectUnscheduledForScheduling(sub);
+      });
+
+      elements.unscheduledList.appendChild(card);
+    }
+  }
+
+  function selectUnscheduledForScheduling(sub) {
+    state.selectedUnscheduledTaskId = sub.task_id;
+    state.selectedEntryId = null;
+
+    elements.editorTitle.textContent = "新建排期 (关联投稿)";
+    elements.entryId.value = "";
+    elements.entryTitle.value = sub.title || sub.task_id;
+    elements.taskSelect.value = sub.task_id;
+    if (!elements.entryDate.value) {
+      elements.entryDate.value = `${state.month}-01`;
+    }
+    elements.legacyNotice.classList.add("hidden");
+    elements.taskLinkBox.classList.remove("hidden");
+    elements.gotoLibraryLink.href = `/library?submission_id=${encodeURIComponent(sub.task_id)}`;
+    elements.saveEntryBtn.disabled = !state.plan || state.plan.status === "locked";
+    elements.deleteEntryBtn.disabled = true;
+
+    renderCalendarGrid();
+    renderUnscheduledList();
+    loadAndDisplayTaskDetail(sub.task_id, sub.title);
+  }
+
   function selectEntry(entry) {
     state.selectedEntryId = entry.entry_id;
+    state.selectedUnscheduledTaskId = null;
     elements.editorTitle.textContent = "编辑排期";
     elements.entryId.value = entry.entry_id;
     elements.entryTitle.value = entry.title || "";
@@ -385,6 +590,14 @@
       const timeMatch = entry.scheduled_at.match(/T(\d{2}:\d{2})/);
       if (timeMatch) elements.entryTime.value = timeMatch[1];
     }
+
+    const isPub = Boolean(entry.execution?.publish);
+    if (elements.entryPublishCheckbox) elements.entryPublishCheckbox.checked = isPub;
+    if (elements.entryAllowDelayCheckbox) elements.entryAllowDelayCheckbox.checked = Boolean(entry.execution?.allow_delay);
+    if (elements.entryDelayMinutesInput) {
+      elements.entryDelayMinutesInput.value = entry.execution?.allow_delay ? (entry.execution?.max_delay_minutes || 240) : 240;
+    }
+    if (elements.entryDelayOptionsRow) elements.entryDelayOptionsRow.classList.toggle("hidden", !isPub);
 
     const isTask = entry.content && entry.content.kind === "task";
     const isInline = entry.content && entry.content.kind === "inline_selection";
@@ -412,6 +625,7 @@
     elements.deleteEntryBtn.disabled = state.plan.status === "locked";
 
     renderCalendarGrid();
+    renderUnscheduledList();
   }
 
   function openNewEntryForDate(dateStr) {
@@ -421,18 +635,24 @@
 
   function resetEditor() {
     state.selectedEntryId = null;
+    state.selectedUnscheduledTaskId = null;
     elements.editorTitle.textContent = "新建排期";
     elements.entryId.value = "";
     elements.entryTitle.value = "";
     elements.entryDate.value = `${state.month}-01`;
     elements.entryTime.value = "20:00";
     elements.taskSelect.value = "";
+    if (elements.entryPublishCheckbox) elements.entryPublishCheckbox.checked = false;
+    if (elements.entryAllowDelayCheckbox) elements.entryAllowDelayCheckbox.checked = false;
+    if (elements.entryDelayMinutesInput) elements.entryDelayMinutesInput.value = 120;
+    if (elements.entryDelayOptionsRow) elements.entryDelayOptionsRow.classList.add("hidden");
     elements.legacyNotice.classList.add("hidden");
     elements.taskLinkBox.classList.add("hidden");
     elements.saveEntryBtn.disabled = !state.plan || state.plan.status === "locked";
     elements.deleteEntryBtn.disabled = true;
     hideTaskDetail();
     renderCalendarGrid();
+    renderUnscheduledList();
   }
 
   // =========================================================================
@@ -517,9 +737,53 @@
     if (elements.detailPixivStatus) {
       if (detail.pixiv && detail.pixiv.illust_id) {
         elements.detailPixivStatus.classList.remove("hidden");
-        elements.detailPixivStatus.innerHTML = `<a href="https://www.pixiv.net/artworks/${encodeURIComponent(detail.pixiv.illust_id)}" target="_blank">✓ Pixiv: PID ${escapeHtml(detail.pixiv.illust_id)} ↗</a>`;
+        const pubTimeText = detail.pixiv.published_at ? ` (实际发布时间: ${formatPublishedAt(detail.pixiv.published_at)})` : "";
+        elements.detailPixivStatus.innerHTML = `<a href="https://www.pixiv.net/artworks/${encodeURIComponent(detail.pixiv.illust_id)}" target="_blank">✓ Pixiv: PID ${escapeHtml(detail.pixiv.illust_id)} ↗</a><span style="font-size:12px;color:var(--text-muted, #64748b);margin-left:8px;">${escapeHtml(pubTimeText)}</span>`;
       } else {
         elements.detailPixivStatus.classList.add("hidden");
+      }
+    }
+
+    // Pixiv 发布与定时管理
+    if (elements.detailPixivBox) {
+      if (detail.isInline) {
+        elements.detailPixivBox.classList.add("hidden");
+      } else {
+        elements.detailPixivBox.classList.remove("hidden");
+        const pix = detail.pixiv || {};
+        if (pix.illust_id) {
+          const pubTimeSuffix = pix.published_at ? ` (${formatPublishedAt(pix.published_at).slice(5, 16)})` : "";
+          elements.detailPublishToPixivBtn.textContent = `✓ 已发布 (PID: ${pix.illust_id})${pubTimeSuffix}`;
+          elements.detailPublishToPixivBtn.disabled = true;
+        } else {
+          elements.detailPublishToPixivBtn.textContent = "🚀 立即发布";
+          elements.detailPublishToPixivBtn.disabled = false;
+        }
+
+        if (elements.detailScheduleAllowDelayCheckbox) {
+          elements.detailScheduleAllowDelayCheckbox.checked = Boolean(detail.allow_delay);
+        }
+        if (elements.detailScheduleDelayMinutesInput) {
+          elements.detailScheduleDelayMinutesInput.value = detail.allow_delay ? (detail.max_delay_minutes || 240) : 240;
+        }
+
+        if (detail.scheduled_publish) {
+          elements.detailSchedulePixivBtn.textContent = "⏹ 取消定时发布";
+          elements.detailSchedulePixivBtn.classList.add("active");
+          if (elements.detailPixivScheduleStatus) {
+            elements.detailPixivScheduleStatus.classList.remove("hidden");
+            elements.detailPixivScheduleStatus.className = "pixiv-schedule-status-box active";
+            const timeWindow = formatScheduleTimeWindow(detail.scheduled_at, detail.allow_delay, detail.max_delay_minutes);
+            const delayTag = detail.allow_delay && detail.max_delay_minutes > 0 ? "" : " (准时)";
+            elements.detailPixivScheduleStatus.innerHTML = `<span>⏰ 定时发布中${delayTag}：将于 <strong>${escapeHtml(timeWindow)}</strong> 自动发布</span>`;
+          }
+        } else {
+          elements.detailSchedulePixivBtn.textContent = "⏰ 开启定时发布";
+          elements.detailSchedulePixivBtn.classList.remove("active");
+          if (elements.detailPixivScheduleStatus) {
+            elements.detailPixivScheduleStatus.classList.add("hidden");
+          }
+        }
       }
     }
 
@@ -573,6 +837,43 @@
 
       elements.detailBuildSection.classList.add("hidden");
       elements.detailNoBuildBox.classList.remove("hidden");
+    }
+  }
+
+  function formatPublishedAt(isoStr) {
+    if (!isoStr) return "";
+    try {
+      const dt = new Date(isoStr);
+      if (isNaN(dt.getTime())) {
+        return String(isoStr).slice(0, 19).replace("T", " ");
+      }
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    } catch (_) {
+      return String(isoStr).slice(0, 19).replace("T", " ");
+    }
+  }
+
+  function formatScheduleTimeWindow(scheduledAtStr, allowDelay, maxDelayMinutes) {
+    if (!scheduledAtStr) return "排期时间";
+    try {
+      const dt = new Date(scheduledAtStr);
+      if (isNaN(dt.getTime())) {
+        return scheduledAtStr.slice(0, 16).replace("T", " ");
+      }
+      const pad = (n) => String(n).padStart(2, "0");
+      const fmt = (d) =>
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+      const startStr = fmt(dt);
+      if (allowDelay && maxDelayMinutes > 0) {
+        const endDt = new Date(dt.getTime() + maxDelayMinutes * 60 * 1000);
+        const endStr = fmt(endDt);
+        return `${startStr} - ${endStr}`;
+      }
+      return startStr;
+    } catch (e) {
+      return scheduledAtStr.slice(0, 16).replace("T", " ");
     }
   }
 
@@ -828,6 +1129,10 @@
     const isEdit = Boolean(entryIdVal);
     const targetEntryId = isEdit ? entryIdVal : `entry-${Date.now().toString(36)}`;
 
+    const isPublish = Boolean(elements.entryPublishCheckbox?.checked);
+    const allowDelay = Boolean(elements.entryAllowDelayCheckbox?.checked);
+    const maxDelayMinutes = parseInt(elements.entryDelayMinutesInput?.value, 10) || 240;
+
     const payload = {
       revision: state.plan.revision,
       entry: {
@@ -835,6 +1140,13 @@
         scheduled_at: scheduledAt,
         title: title,
         content: contentObj,
+        execution: {
+          build_on_due: true,
+          notify_on_complete: true,
+          publish: isPublish,
+          allow_delay: allowDelay,
+          max_delay_minutes: maxDelayMinutes,
+        },
       },
     };
 
@@ -867,6 +1179,7 @@
       renderCalendarGrid();
       const updated = (state.plan.entries || []).find((x) => x.entry_id === targetEntryId);
       if (updated) selectEntry(updated);
+      loadSubmissionsList();
     } catch (err) {
       showNotice(err.message, "error");
     }
@@ -888,6 +1201,7 @@
       state.plan = await res.json();
       showNotice("排期已删除", "info");
       resetEditor();
+      loadSubmissionsList();
     } catch (err) {
       showNotice(err.message, "error");
     }
@@ -921,6 +1235,94 @@
     }
   }
 
+  async function handleDetailPublishToPixiv() {
+    const detail = state.currentDetail;
+    if (!detail || !detail.task_id || detail.isInline) return;
+    const title = detail.title || detail.task_id;
+    if (!confirm(`确定要立即将【${title}】发布到 Pixiv 吗？`)) return;
+
+    if (elements.detailPublishToPixivBtn) {
+      elements.detailPublishToPixivBtn.disabled = true;
+    }
+    showNotice(`正在发布【${title}】到 Pixiv...`, "info");
+
+    try {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(detail.task_id)}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force_rebuild: false, force_republish: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail?.message || data.detail || "发布失败");
+      }
+      showNotice(`🎉 ${data.message || "发布成功！"}`, "info");
+      state.taskDetailsCache.delete(detail.task_id);
+      await loadAndDisplayTaskDetail(detail.task_id, detail.title);
+      await loadSubmissionsList();
+    } catch (err) {
+      showNotice(`发布失败: ${err.message}`, "error");
+    } finally {
+      if (elements.detailPublishToPixivBtn) {
+        elements.detailPublishToPixivBtn.disabled = false;
+      }
+    }
+  }
+
+  async function handleDetailToggleSchedulePublish() {
+    const detail = state.currentDetail;
+    if (!detail || !detail.task_id || detail.isInline) return;
+
+    const enabling = !detail.scheduled_publish;
+    const allowDelay = Boolean(elements.detailScheduleAllowDelayCheckbox?.checked);
+    const maxDelayMinutes = parseInt(elements.detailScheduleDelayMinutesInput?.value, 10) || 240;
+
+    let schedAt = detail.scheduled_at;
+    if (enabling && !schedAt) {
+      const dateVal = elements.entryDate?.value?.trim();
+      const timeVal = elements.entryTime?.value?.trim() || "20:00";
+      if (dateVal) {
+        schedAt = `${dateVal}T${timeVal}:00+08:00`;
+      } else {
+        showNotice("请先设置排期日期和时间后再开启定时发布", "warning");
+        return;
+      }
+    }
+
+    if (elements.detailSchedulePixivBtn) {
+      elements.detailSchedulePixivBtn.disabled = true;
+    }
+    try {
+      const res = await fetch(`/api/submissions/${encodeURIComponent(detail.task_id)}/schedule-publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enable: enabling,
+          scheduled_at: schedAt,
+          allow_delay: allowDelay,
+          max_delay_minutes: maxDelayMinutes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const detailErr = data.detail || {};
+        const msg = detailErr.message || (typeof data.detail === "string" ? data.detail : "操作失败");
+        throw new Error(msg);
+      }
+      showNotice(data.message || (enabling ? "已开启定时发布" : "已取消定时发布"), "info");
+      state.taskDetailsCache.delete(detail.task_id);
+      await loadPlan(state.month);
+      await loadAndDisplayTaskDetail(detail.task_id, detail.title);
+      await loadSubmissionsList();
+    } catch (err) {
+      showNotice(`定时发布设置失败: ${err.message}`, "error");
+    } finally {
+      if (elements.detailSchedulePixivBtn) {
+        elements.detailSchedulePixivBtn.disabled = false;
+      }
+    }
+  }
+
   // 事件监听绑定
   elements.monthPicker.addEventListener("change", (e) => {
     if (e.target.value) loadPlan(e.target.value);
@@ -941,6 +1343,33 @@
   elements.deleteEntryBtn.addEventListener("click", handleDeleteEntry);
   if (elements.detailDeleteSubmissionBtn) {
     elements.detailDeleteSubmissionBtn.addEventListener("click", handleDetailDeleteSubmission);
+  }
+  if (elements.detailPublishToPixivBtn) {
+    elements.detailPublishToPixivBtn.addEventListener("click", handleDetailPublishToPixiv);
+  }
+  if (elements.detailSchedulePixivBtn) {
+    elements.detailSchedulePixivBtn.addEventListener("click", handleDetailToggleSchedulePublish);
+  }
+
+  if (elements.entryPublishCheckbox) {
+    elements.entryPublishCheckbox.addEventListener("change", (e) => {
+      if (elements.entryDelayOptionsRow) {
+        elements.entryDelayOptionsRow.classList.toggle("hidden", !e.target.checked);
+      }
+    });
+  }
+
+  if (elements.unscheduledSearchInput) {
+    elements.unscheduledSearchInput.addEventListener("input", (e) => {
+      state.unscheduledSearchQuery = e.target.value;
+      renderUnscheduledList();
+    });
+  }
+
+  if (elements.refreshUnscheduledBtn) {
+    elements.refreshUnscheduledBtn.addEventListener("click", () => {
+      loadSubmissionsList();
+    });
   }
 
   elements.taskSelect.addEventListener("change", (e) => {
