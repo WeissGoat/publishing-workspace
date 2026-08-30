@@ -339,6 +339,15 @@
     lbSnapshotsSection: document.getElementById("lb-snapshots-section"),
     lbSnapshotsCount: document.getElementById("lb-snapshots-count"),
     lbSnapshotsList: document.getElementById("lb-snapshots-list"),
+
+    lbRelatedSection: document.getElementById("lb-related-section"),
+    lbRelatedTotalCount: document.getElementById("lb-related-total-count"),
+    lbRelatedTabs: document.getElementById("lb-related-tabs"),
+    lbRelBadgeBatch: document.getElementById("lb-rel-badge-batch"),
+    lbRelBadgeSeed: document.getElementById("lb-rel-badge-seed"),
+    lbRelBadgeAdj: document.getElementById("lb-rel-badge-adj"),
+    lbRelatedList: document.getElementById("lb-related-list"),
+    lbRelatedHint: document.getElementById("lb-related-hint"),
   };
 
   let noticeTimer = null;
@@ -1720,90 +1729,44 @@
       elements.lbSnapshotsCount.textContent = "";
     }
 
+    if (elements.lbRelatedList) {
+      elements.lbRelatedList.innerHTML = '<div class="lb-related-empty">正在检索关联图片...</div>';
+    }
+    if (elements.lbRelatedTotalCount) elements.lbRelatedTotalCount.textContent = "";
+    if (elements.lbRelBadgeBatch) elements.lbRelBadgeBatch.textContent = "(0)";
+    if (elements.lbRelBadgeSeed) elements.lbRelBadgeSeed.textContent = "(0)";
+    if (elements.lbRelBadgeAdj) elements.lbRelBadgeAdj.textContent = "(0)";
+    if (elements.lbRelatedHint) elements.lbRelatedHint.classList.add("hidden");
+
     // 4. 按钮状态初始同步
     updateLightboxButtonStates(assetId);
 
-    // 5. 异步获取完整 PNG 元数据与关联快照
+    // 5. 并行异步获取：基础生成参数/Prompt (1~2ms瞬开)、关联快照列表、关联图片列表 (互不阻塞)
+    loadLightboxBasicDetails(assetId);
+    loadLightboxSnapshots(assetId);
+    loadLightboxRelated(assetId);
+  }
+
+  async function loadLightboxBasicDetails(assetId) {
     try {
       const res = await fetch(`/api/assets/${encodeURIComponent(assetId)}/details?v=${Date.now()}`);
-      if (res.ok && state.lightbox.activeAssetId === assetId) {
+      if (!res.ok) {
+        console.error(`[Lightbox] 获取素材生成参数失败 HTTP ${res.status}:`, assetId);
+        return;
+      }
+      if (state.lightbox.activeAssetId === assetId) {
         const detail = await res.json();
         state.lightbox.currentAssetDetails = detail;
         state.loadedAssets.set(assetId, detail);
         elements.lightboxFilename.textContent = detail.display_name || assetId;
         elements.lightboxFilepath.textContent = detail.path || "";
         if (detail.width && detail.height) {
-          elements.lbMetaDimensions.textContent = `${detail.width} × ${detail.height}`;
+          elements.lbMetaDimensions.textContent = `${detail.width} × ${detail.height} (${detail.image_format || "PNG"})`;
         }
 
-        if (detail.tags && detail.tags.length > 0 && elements.lbTagsList && elements.lbTagsSection) {
-          elements.lbTagsList.innerHTML = detail.tags
-            .map((t) => `<span class="lb-tag-badge">🏷️ ${escapeHtml(t)}</span>`)
-            .join("");
-          elements.lbTagsSection.hidden = false;
-        } else if (elements.lbTagsSection) {
-          elements.lbTagsSection.hidden = true;
-        }
-
-        // 渲染关联快照列表 (A-2 方案)
-        if (elements.lbSnapshotsList) {
-          const snaps = Array.isArray(detail.snapshots) ? detail.snapshots : [];
-          if (elements.lbSnapshotsCount) {
-            elements.lbSnapshotsCount.textContent = `(共 ${snaps.length} 个)`;
-          }
-          if (snaps.length === 0) {
-            elements.lbSnapshotsList.innerHTML = '<div class="lb-snapshot-empty">此图片未关联任何快照</div>';
-          } else {
-            const currentIds = Array.isArray(state.filters.import_ids) ? state.filters.import_ids : [];
-            elements.lbSnapshotsList.innerHTML = snaps.map((s) => {
-              const isCurrent = currentIds.includes(s.import_id) || (currentIds.length === 0 && state.filters.import_id === s.import_id);
-              const icon = s.source_type === "neev_playlist" ? "📑" : "📁";
-              const typeLabel = s.source_type === "neev_playlist" ? "NeeView 列表" : "目录导入";
-              const dateStr = s.created_at ? s.created_at.slice(0, 16).replace("T", " ") : "";
-              const orderIndex = (s.source_order ?? 0) + 1;
-              const totalStr = s.total_items ? ` / 共 ${s.total_items} 张` : "";
-              return `
-                <div class="lb-snapshot-card ${isCurrent ? "is-active" : ""}">
-                  <div class="lb-snapshot-header">
-                    <div class="lb-snapshot-name-wrap">
-                      <span class="lb-snapshot-icon">${icon}</span>
-                      <strong class="lb-snapshot-name" title="${escapeHtml(s.source_ref || s.name || s.import_id)}">${escapeHtml(s.name || s.import_id)}</strong>
-                    </div>
-                    ${isCurrent ? '<span class="lb-snapshot-badge badge-active">📍 当前浏览</span>' : `<span class="lb-snapshot-badge">${typeLabel}</span>`}
-                  </div>
-                  <div class="lb-snapshot-meta-row">
-                    <span class="lb-snapshot-order">📍 位置: 第 ${orderIndex}${totalStr} (序号 #${s.source_order ?? 0})</span>
-                    <span class="lb-snapshot-time">${dateStr}</span>
-                  </div>
-                  <div class="lb-snapshot-actions">
-                    <button type="button" class="lb-snapshot-jump-btn ${isCurrent ? "btn-active-loc" : ""}" 
-                      data-action="jump-snapshot" 
-                      data-import-id="${escapeHtml(s.import_id)}" 
-                      data-snap-name="${escapeHtml(s.name || s.import_id)}"
-                      data-asset-id="${escapeHtml(assetId)}" 
-                      data-order="${s.source_order ?? 0}">
-                      ${isCurrent ? "🎯 定位当前卡片位置" : "🚀 跳转至此快照并定位"}
-                    </button>
-                  </div>
-                </div>
-              `;
-            }).join("");
-
-            elements.lbSnapshotsList.querySelectorAll('[data-action="jump-snapshot"]').forEach((btn) => {
-              btn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                const importId = btn.dataset.importId;
-                const targetAssetId = btn.dataset.assetId;
-                const snapName = btn.dataset.snapName;
-                const targetOrder = parseInt(btn.dataset.order, 10) || 0;
-                await jumpToSnapshotAndLocate(importId, targetAssetId, snapName, targetOrder);
-              });
-            });
-          }
-        }
-
+        // 基础生成参数与 Prompt 瞬时填充
         const gen = detail.generation_info || {};
-        elements.lbMetaDimensions.textContent = `${detail.width} × ${detail.height} (${detail.image_format || "PNG"})`;
+        elements.lbMetaDimensions.textContent = `${detail.width || "-"} × ${detail.height || "-"} (${detail.image_format || "PNG"})`;
         elements.lbMetaSize.textContent = gen.file_size_human || "-";
         elements.lbMetaMtime.textContent = gen.modified_at || "-";
         elements.lbMetaSeed.textContent = gen.seed ?? "-";
@@ -1822,9 +1785,301 @@
 
         // 更新投稿与收藏状态
         updateLightboxButtonStates(assetId, detail.is_favorited, detail.is_posted);
+
+        // 渲染筛选标签
+        if (detail.tags && detail.tags.length > 0 && elements.lbTagsList && elements.lbTagsSection) {
+          elements.lbTagsList.innerHTML = detail.tags
+            .map((t) => `<span class="lb-tag-badge">🏷️ ${escapeHtml(t)}</span>`)
+            .join("");
+          elements.lbTagsSection.hidden = false;
+        } else if (elements.lbTagsSection) {
+          elements.lbTagsSection.hidden = true;
+        }
       }
     } catch (err) {
-      console.warn("获取素材详情失败", err);
+      console.error("[Lightbox] 加载基础生成参数异常:", err);
+    }
+  }
+
+  async function loadLightboxSnapshots(assetId) {
+    if (!elements.lbSnapshotsList) return;
+    try {
+      const res = await fetch(`/api/assets/${encodeURIComponent(assetId)}/snapshots?v=${Date.now()}`);
+      if (!res.ok) {
+        if (state.lightbox.activeAssetId === assetId) {
+          elements.lbSnapshotsList.innerHTML = `<div class="lb-snapshot-empty">加载快照列表失败 (HTTP ${res.status})</div>`;
+        }
+        return;
+      }
+      if (state.lightbox.activeAssetId === assetId) {
+        const data = await res.json();
+        const snaps = Array.isArray(data.snapshots) ? data.snapshots : [];
+        if (elements.lbSnapshotsCount) {
+          elements.lbSnapshotsCount.textContent = `(共 ${snaps.length} 个)`;
+        }
+        if (snaps.length === 0) {
+          elements.lbSnapshotsList.innerHTML = '<div class="lb-snapshot-empty">此图片未关联任何快照</div>';
+        } else {
+          const currentIds = Array.isArray(state.filters.import_ids) ? state.filters.import_ids : [];
+          elements.lbSnapshotsList.innerHTML = snaps.map((s) => {
+            const isCurrent = currentIds.includes(s.import_id) || (currentIds.length === 0 && state.filters.import_id === s.import_id);
+            const icon = s.source_type === "neev_playlist" ? "📑" : "📁";
+            const typeLabel = s.source_type === "neev_playlist" ? "NeeView 列表" : "目录导入";
+            const dateStr = s.created_at ? s.created_at.slice(0, 16).replace("T", " ") : "";
+            const orderIndex = (s.source_order ?? 0) + 1;
+            const totalStr = s.total_items ? ` / 共 ${s.total_items} 张` : "";
+            return `
+              <div class="lb-snapshot-card ${isCurrent ? "is-active" : ""}">
+                <div class="lb-snapshot-header">
+                  <div class="lb-snapshot-name-wrap">
+                    <span class="lb-snapshot-icon">${icon}</span>
+                    <strong class="lb-snapshot-name" title="${escapeHtml(s.source_ref || s.name || s.import_id)}">${escapeHtml(s.name || s.import_id)}</strong>
+                  </div>
+                  ${isCurrent ? '<span class="lb-snapshot-badge badge-active">📍 当前浏览</span>' : `<span class="lb-snapshot-badge">${typeLabel}</span>`}
+                </div>
+                <div class="lb-snapshot-meta-row">
+                  <span class="lb-snapshot-order">📍 位置: 第 ${orderIndex}${totalStr} (序号 #${s.source_order ?? 0})</span>
+                  <span class="lb-snapshot-time">${dateStr}</span>
+                </div>
+                <div class="lb-snapshot-actions">
+                  <button type="button" class="lb-snapshot-jump-btn ${isCurrent ? "btn-active-loc" : ""}" 
+                    data-action="jump-snapshot" 
+                    data-import-id="${escapeHtml(s.import_id)}" 
+                    data-snap-name="${escapeHtml(s.name || s.import_id)}"
+                    data-asset-id="${escapeHtml(assetId)}" 
+                    data-order="${s.source_order ?? 0}">
+                    ${isCurrent ? "🎯 定位当前卡片位置" : "🚀 跳转至此快照并定位"}
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join("");
+
+          elements.lbSnapshotsList.querySelectorAll('[data-action="jump-snapshot"]').forEach((btn) => {
+            btn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              const importId = btn.dataset.importId;
+              const targetAssetId = btn.dataset.assetId;
+              const snapName = btn.dataset.snapName;
+              const targetOrder = parseInt(btn.dataset.order, 10) || 0;
+              await jumpToSnapshotAndLocate(importId, targetAssetId, snapName, targetOrder);
+            });
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[Lightbox] 加载快照列表异常:", err);
+      if (elements.lbSnapshotsList && state.lightbox.activeAssetId === assetId) {
+        elements.lbSnapshotsList.innerHTML = '<div class="lb-snapshot-empty">加载快照异常，请刷新重试</div>';
+      }
+    }
+  }
+
+  async function loadLightboxRelated(assetId) {
+    if (!elements.lbRelatedList) return;
+    try {
+      const res = await fetch(`/api/assets/${encodeURIComponent(assetId)}/related?v=${Date.now()}`);
+      if (!res.ok) {
+        if (state.lightbox.activeAssetId === assetId) {
+          elements.lbRelatedList.innerHTML = `<div class="lb-related-empty">加载关联图片失败 (HTTP ${res.status})</div>`;
+        }
+        return;
+      }
+      if (state.lightbox.activeAssetId === assetId) {
+        const related = await res.json();
+        state.lightbox.currentRelated = related;
+        const dims = related.dimensions || {};
+        const bTotal = dims.same_batch?.total || 0;
+        const sTotal = dims.same_seed?.total || 0;
+        const aTotal = dims.time_adjacent?.total || 0;
+        const totalAll = bTotal + sTotal + aTotal;
+
+        if (elements.lbRelatedTotalCount) {
+          elements.lbRelatedTotalCount.textContent = `(共 ${totalAll} 张)`;
+        }
+        if (elements.lbRelBadgeBatch) elements.lbRelBadgeBatch.textContent = `(${bTotal})`;
+        if (elements.lbRelBadgeSeed) elements.lbRelBadgeSeed.textContent = `(${sTotal})`;
+        if (elements.lbRelBadgeAdj) elements.lbRelBadgeAdj.textContent = `(${aTotal})`;
+
+        // 自动选择首个有数据的维度页签（优先级：同批 -> 同Seed -> 邻近生图）
+        let defaultTab = "same_batch";
+        if (bTotal > 0) defaultTab = "same_batch";
+        else if (sTotal > 0) defaultTab = "same_seed";
+        else if (aTotal > 0) defaultTab = "time_adjacent";
+
+        state.lightbox.currentRelatedActiveTab = defaultTab;
+        if (elements.lbRelatedTabs) {
+          elements.lbRelatedTabs.querySelectorAll(".lb-rel-tab-btn").forEach((btn) => {
+            btn.classList.toggle("active", btn.dataset.relTab === defaultTab);
+          });
+        }
+        renderRelatedDimension(defaultTab);
+      }
+    } catch (err) {
+      console.error("[Lightbox] 加载关联图片异常:", err);
+      if (elements.lbRelatedList && state.lightbox.activeAssetId === assetId) {
+        elements.lbRelatedList.innerHTML = '<div class="lb-related-empty">加载关联图片异常，请刷新重试</div>';
+      }
+    }
+  }
+
+  function renderRelatedDimension(dimKey) {
+    if (!elements.lbRelatedList) return;
+    const rel = state.lightbox.currentRelated;
+    const dims = rel?.dimensions || {};
+    const dim = dims[dimKey] || { items: [], total: 0 };
+    const items = Array.isArray(dim.items) ? dim.items : [];
+
+    if (items.length === 0) {
+      elements.lbRelatedList.innerHTML = '<div class="lb-related-empty">暂无该维度的关联图片</div>';
+      if (elements.lbRelatedHint) elements.lbRelatedHint.classList.add("hidden");
+      return;
+    }
+
+    const currentIds = Array.isArray(state.filters.import_ids) ? state.filters.import_ids : [];
+    const currentSnapId = currentIds[0] || state.filters.import_id || "";
+
+    elements.lbRelatedList.innerHTML = items.map((item) => {
+      const snaps = Array.isArray(item.snapshots) ? item.snapshots : [];
+      const dimsText = item.width && item.height ? `${item.width}×${item.height}` : "";
+      const labelBadge = item.relation_label ? `<span class="lb-related-tag-badge">${escapeHtml(item.relation_label)}</span>` : "";
+
+      // 快照徽章 chips
+      const snapChipsHtml = snaps.map((s) => {
+        const isCur = s.import_id === currentSnapId || currentIds.includes(s.import_id);
+        const orderIdx = (s.source_order ?? 0) + 1;
+        return `<span class="lb-related-snap-chip" title="点击跳转至快照【${escapeHtml(s.name || s.import_id)}】第 ${orderIdx} 张"
+          data-action="jump-rel-snap"
+          data-import-id="${escapeHtml(s.import_id)}"
+          data-snap-name="${escapeHtml(s.name || s.import_id)}"
+          data-asset-id="${escapeHtml(item.asset_id)}"
+          data-order="${s.source_order ?? 0}">
+          📁 ${escapeHtml(s.name || s.import_id)} #${orderIdx}${isCur ? " 📍" : ""}
+        </span>`;
+      }).join("");
+
+      // 跳转按钮
+      let jumpBtnHtml = "";
+      if (snaps.length === 1) {
+        const s = snaps[0];
+        const isCur = s.import_id === currentSnapId || currentIds.includes(s.import_id);
+        jumpBtnHtml = `
+          <button type="button" class="lb-rel-jump-btn"
+            data-action="jump-rel-snap"
+            data-import-id="${escapeHtml(s.import_id)}"
+            data-snap-name="${escapeHtml(s.name || s.import_id)}"
+            data-asset-id="${escapeHtml(item.asset_id)}"
+            data-order="${s.source_order ?? 0}">
+            ${isCur ? "🎯 定位" : "🚀 跳转"}
+          </button>
+        `;
+      } else if (snaps.length > 1) {
+        jumpBtnHtml = `
+          <button type="button" class="lb-rel-jump-btn" data-action="toggle-rel-popover">
+            🚀 跳转 (${snaps.length}) ▾
+          </button>
+        `;
+      }
+
+      return `
+        <div class="lb-related-card" data-asset-id="${escapeHtml(item.asset_id)}">
+          <div class="lb-related-thumb-wrap" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="点击在当前弹窗查看">
+            <img class="lb-related-thumb-img" src="/api/assets/${encodeURIComponent(item.asset_id)}/preview?v=${Date.now()}" alt="${escapeHtml(item.display_name)}" loading="lazy">
+          </div>
+          <div class="lb-related-info">
+            <strong class="lb-related-name" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="${escapeHtml(item.display_name)}">${escapeHtml(item.display_name)}</strong>
+            <div class="lb-related-meta-row">
+              ${labelBadge}
+              ${dimsText ? `<span>${dimsText}</span>` : ""}
+            </div>
+            ${snaps.length > 0 ? `<div class="lb-related-snaps-row">${snapChipsHtml}</div>` : ""}
+          </div>
+          <div class="lb-related-actions">
+            <button type="button" class="lb-rel-view-btn" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}">🔍 查看</button>
+            ${jumpBtnHtml}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    // 绑定查看与定位事件
+    elements.lbRelatedList.querySelectorAll('[data-action="view-related"]').forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const targetId = el.dataset.assetId;
+        if (targetId) {
+          openLightbox(targetId);
+        }
+      });
+    });
+
+    elements.lbRelatedList.querySelectorAll('[data-action="jump-rel-snap"]').forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const importId = btn.dataset.importId;
+        const targetAssetId = btn.dataset.assetId;
+        const snapName = btn.dataset.snapName;
+        const targetOrder = parseInt(btn.dataset.order, 10) || 0;
+        await jumpToSnapshotAndLocate(importId, targetAssetId, snapName, targetOrder);
+      });
+    });
+
+    elements.lbRelatedList.querySelectorAll('[data-action="toggle-rel-popover"]').forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const card = btn.closest(".lb-related-card");
+        if (!card) return;
+        const assetId = card.dataset.assetId;
+        const targetItem = items.find((it) => it.asset_id === assetId);
+        if (!targetItem || !targetItem.snapshots) return;
+
+        const existing = card.querySelector(".lb-rel-popover");
+        if (existing) {
+          existing.remove();
+          return;
+        }
+
+        document.querySelectorAll(".lb-rel-popover").forEach((p) => p.remove());
+
+        const popover = document.createElement("div");
+        popover.className = "lb-rel-popover";
+        popover.innerHTML = targetItem.snapshots.map((s) => {
+          const orderIdx = (s.source_order ?? 0) + 1;
+          return `
+            <div class="lb-rel-popover-item"
+              data-import-id="${escapeHtml(s.import_id)}"
+              data-snap-name="${escapeHtml(s.name || s.import_id)}"
+              data-asset-id="${escapeHtml(targetItem.asset_id)}"
+              data-order="${s.source_order ?? 0}">
+              <span>📁 ${escapeHtml(s.name || s.import_id)}</span>
+              <span style="color:#fbbf24;font-size:10px;">#${orderIdx}</span>
+            </div>
+          `;
+        }).join("");
+
+        popover.querySelectorAll(".lb-rel-popover-item").forEach((itemEl) => {
+          itemEl.addEventListener("click", async (evt) => {
+            evt.stopPropagation();
+            popover.remove();
+            const importId = itemEl.dataset.importId;
+            const targetAssetId = itemEl.dataset.assetId;
+            const snapName = itemEl.dataset.snapName;
+            const targetOrder = parseInt(itemEl.dataset.order, 10) || 0;
+            await jumpToSnapshotAndLocate(importId, targetAssetId, snapName, targetOrder);
+          });
+        });
+
+        card.appendChild(popover);
+      });
+    });
+
+    if (elements.lbRelatedHint) {
+      if (dimKey === "time_adjacent" && dim.total > items.length) {
+        elements.lbRelatedHint.textContent = `共 ${dim.total} 张，已展示时间最近的前 ${items.length} 张`;
+        elements.lbRelatedHint.classList.remove("hidden");
+      } else {
+        elements.lbRelatedHint.classList.add("hidden");
+      }
     }
   }
 
@@ -5447,6 +5702,27 @@
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
       navigateLightbox(1);
+    }
+  });
+
+  // 🖼️ 关联图片维度页签切换
+  if (elements.lbRelatedTabs) {
+    elements.lbRelatedTabs.addEventListener("click", (e) => {
+      const btn = e.target.closest(".lb-rel-tab-btn");
+      if (!btn) return;
+      e.stopPropagation();
+      elements.lbRelatedTabs.querySelectorAll(".lb-rel-tab-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      const dimKey = btn.dataset.relTab;
+      state.lightbox.currentRelatedActiveTab = dimKey;
+      renderRelatedDimension(dimKey);
+    });
+  }
+
+  // 点击外部关闭关联图片多快照下拉菜单
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".lb-rel-popover") && !e.target.closest('[data-action="toggle-rel-popover"]')) {
+      document.querySelectorAll(".lb-rel-popover").forEach((p) => p.remove());
     }
   });
 

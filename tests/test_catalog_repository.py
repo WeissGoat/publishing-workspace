@@ -133,3 +133,68 @@ def test_snapshots_for_asset_returns_all_occurrences(tmp_path: Path):
     assert snap2["display_name"] == "custom_title.png"
     assert snap2["name"] == "playlist.nvpls"
 
+
+def test_related_batch_assets_by_prefix(tmp_path: Path):
+    img0 = _png(tmp_path / "batch" / "comm_seed_123_456_0.png", "red")
+    img1 = _png(tmp_path / "batch" / "comm_seed_123_456_1.png", "green")
+    img2 = _png(tmp_path / "batch" / "comm_seed_123_456_2.png", "blue")
+    img_other = _png(tmp_path / "batch" / "other_image.png", "yellow")
+
+    selection = SelectionSet(
+        id="import-batch",
+        source_type="directory",
+        source_ref=str(tmp_path / "batch"),
+        items=[
+            ImportedItem(
+                source_path=str(img0),
+                resolved_path=str(img0),
+                source_type="directory",
+                source_ref=str(tmp_path / "batch"),
+                source_order=0,
+                display_name=img0.name,
+            ),
+            ImportedItem(
+                source_path=str(img1),
+                resolved_path=str(img1),
+                source_type="directory",
+                source_ref=str(tmp_path / "batch"),
+                source_order=1,
+                display_name=img1.name,
+            ),
+            ImportedItem(
+                source_path=str(img2),
+                resolved_path=str(img2),
+                source_type="directory",
+                source_ref=str(tmp_path / "batch"),
+                source_order=2,
+                display_name=img2.name,
+            ),
+            ImportedItem(
+                source_path=str(img_other),
+                resolved_path=str(img_other),
+                source_type="directory",
+                source_ref=str(tmp_path / "batch"),
+                source_order=3,
+                display_name=img_other.name,
+            ),
+        ],
+    )
+    repository = CatalogRepository(tmp_path / "catalog.sqlite")
+    repository.import_selection(
+        selection,
+        readers=default_image_node_reader_registry(),
+        enrichers=[],
+    )
+
+    imported = repository.assets_for_import("import-batch")
+    asset0 = imported[0]  # comm_seed_123_456_0.png
+
+    related = repository.related_assets_for_asset(asset0.asset_id)
+    same_batch = related.get("dimensions", {}).get("same_batch", {})
+    assert same_batch.get("total") == 2
+    sibling_names = [item["display_name"] for item in same_batch.get("items", [])]
+    assert "comm_seed_123_456_1.png" in sibling_names
+    assert "comm_seed_123_456_2.png" in sibling_names
+    assert "comm_seed_123_456_0.png" not in sibling_names
+
+

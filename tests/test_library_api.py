@@ -630,6 +630,20 @@ def test_asset_details_includes_snapshots(tmp_path: Path):
     assert len(snap_data["snapshots"]) >= 1
 
 
+def test_asset_details_includes_related(tmp_path: Path):
+    client, import_id, asset_ids = client_with_catalog(tmp_path)
+    asset_id = asset_ids[0]
+
+    rel_resp = client.get(f"/api/assets/{asset_id}/related")
+    assert rel_resp.status_code == 200
+    rel_data = rel_resp.json()
+    assert "dimensions" in rel_data
+    assert "same_batch" in rel_data["dimensions"]
+    assert "same_seed" in rel_data["dimensions"]
+    assert "time_adjacent" in rel_data["dimensions"]
+
+
+
 
 
 

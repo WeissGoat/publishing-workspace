@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260830-01">
+  <link rel="stylesheet" href="/library.css?v=20260830-06">
 </head>
 <body>
   <main class="app-shell">
@@ -699,6 +699,36 @@
               <div id="lb-snapshots-list" class="lb-snapshots-list"></div>
             </div>
 
+            <!-- 🖼️ 关联图片 (同批生成 / 同Seed / 邻近生图) -->
+            <div id="lb-related-section" class="lightbox-meta-section lb-related-section">
+              <div class="section-title-row">
+                <h4 class="lightbox-section-title">🖼️ 关联图片 <span id="lb-related-total-count" class="meta-count-badge">(0)</span></h4>
+                <span class="lightbox-section-hint">点击缩略图查看，或直达快照定位</span>
+              </div>
+              
+              <!-- 维度分段切换页签 -->
+              <div id="lb-related-tabs" class="lb-related-tabs">
+                <button type="button" class="lb-rel-tab-btn active" data-rel-tab="same_batch">
+                  <span>🎯 同批生成</span>
+                  <span id="lb-rel-badge-batch" class="rel-tab-count">(0)</span>
+                </button>
+                <button type="button" class="lb-rel-tab-btn" data-rel-tab="same_seed">
+                  <span>🎲 同Seed</span>
+                  <span id="lb-rel-badge-seed" class="rel-tab-count">(0)</span>
+                </button>
+                <button type="button" class="lb-rel-tab-btn" data-rel-tab="time_adjacent">
+                  <span>👤 邻近生图</span>
+                  <span id="lb-rel-badge-adj" class="rel-tab-count">(0)</span>
+                </button>
+              </div>
+
+              <!-- 关联图片滚动列表（定高防撑大） -->
+              <div class="lb-related-list-wrap">
+                <div id="lb-related-list" class="lb-related-list"></div>
+              </div>
+              <div id="lb-related-hint" class="lb-related-footer-hint hidden"></div>
+            </div>
+
             <!-- 🏷️ 导入与筛选标签 -->
             <div id="lb-tags-section" class="lightbox-meta-section" hidden>
               <h4 class="lightbox-section-title">🏷️ 筛选标签</h4>
@@ -813,6 +843,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260830-01" defer></script>
+  <script src="/library.js?v=20260830-06" defer></script>
 </body>
 </html>

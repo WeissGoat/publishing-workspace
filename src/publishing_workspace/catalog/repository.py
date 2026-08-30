@@ -762,42 +762,51 @@ class CatalogRepository:
         # 3. 优先级 3：👤 同角色 + 时间邻近 + 同 action_group (Time Adjacent)
         time_adjacent_items: list[dict[str, Any]] = []
         total_adjacent_count = 0
-        if target_character:
+        if target_character and target_mtime_ns > 0:
             with self.connection() as conn:
+                target_earliest_ns = self._get_earliest_asset_time_ns(conn, asset_id, target_mtime_ns)
+                window_ns = 7200 * 1_000_000_000  # 2 小时窗口
+                low_ns = max(0, target_earliest_ns - window_ns)
+                high_ns = target_earliest_ns + window_ns
+
                 if target_action_group:
                     adj_rows = conn.execute(
-                        "SELECT DISTINCT an1.asset_id, ap.modified_ns "
+                        "SELECT an1.asset_id, MIN(ap.modified_ns) AS earliest_mtime_ns "
                         "FROM asset_nodes an1 "
                         "JOIN asset_nodes an2 ON an1.asset_id = an2.asset_id "
                         "JOIN asset_paths ap ON ap.asset_id = an1.asset_id "
                         "WHERE an1.role='character' AND an1.node_id=? "
                         "  AND an2.role='action_group' AND an2.node_id=? "
-                        "  AND an1.asset_id != ?",
-                        (target_character, target_action_group, asset_id),
+                        "  AND an1.asset_id != ? AND ap.modified_ns BETWEEN ? AND ? "
+                        "GROUP BY an1.asset_id "
+                        "ORDER BY ABS(MIN(ap.modified_ns) - ?) ASC "
+                        "LIMIT 16",
+                        (target_character, target_action_group, asset_id, low_ns, high_ns, target_earliest_ns),
                     ).fetchall()
                 else:
                     adj_rows = conn.execute(
-                        "SELECT DISTINCT an1.asset_id, ap.modified_ns "
+                        "SELECT an1.asset_id, MIN(ap.modified_ns) AS earliest_mtime_ns "
                         "FROM asset_nodes an1 "
                         "JOIN asset_paths ap ON ap.asset_id = an1.asset_id "
                         "WHERE an1.role='character' AND an1.node_id=? "
-                        "  AND an1.asset_id != ?",
-                        (target_character, asset_id),
+                        "  AND an1.asset_id != ? AND ap.modified_ns BETWEEN ? AND ? "
+                        "GROUP BY an1.asset_id "
+                        "ORDER BY ABS(MIN(ap.modified_ns) - ?) ASC "
+                        "LIMIT 16",
+                        (target_character, asset_id, low_ns, high_ns, target_earliest_ns),
                     ).fetchall()
 
-            adj_candidates = []
-            seen_adj_ids: set[str] = set()
-            for r in adj_rows:
-                c_id = r["asset_id"]
-                if c_id in seen_asset_ids or c_id in seen_adj_ids:
-                    continue
-                seen_adj_ids.add(c_id)
-                cand_mtime_ns = r["modified_ns"] or 0
-                time_diff_sec = abs(cand_mtime_ns - target_mtime_ns) / 1_000_000_000
-                if time_diff_sec <= 7200:
-                    adj_candidates.append((time_diff_sec, c_id, cand_mtime_ns))
+                adj_candidates = []
+                seen_adj_ids: set[str] = set()
+                for r in adj_rows:
+                    c_id = r["asset_id"]
+                    if c_id in seen_asset_ids or c_id in seen_adj_ids:
+                        continue
+                    seen_adj_ids.add(c_id)
+                    cand_earliest_ns = int(r["earliest_mtime_ns"] or 0)
+                    time_diff_sec = abs(cand_earliest_ns - target_earliest_ns) / 1_000_000_000
+                    adj_candidates.append((time_diff_sec, c_id, cand_earliest_ns))
 
-            adj_candidates.sort(key=lambda x: x[0])
             total_adjacent_count = len(adj_candidates)
             top_adjacent = adj_candidates[:8]
 
@@ -843,6 +852,21 @@ class CatalogRepository:
                 },
             },
         }
+
+    def _get_earliest_asset_time_ns(
+        self,
+        conn: sqlite3.Connection,
+        asset_id: str,
+        default_ns: int = 0,
+    ) -> int:
+        """获取指定资产在所有物理副本路径中最原始的最早时间戳。"""
+        row = conn.execute(
+            "SELECT MIN(modified_ns) AS min_mtime FROM asset_paths WHERE asset_id=? AND available=1 AND modified_ns > 0",
+            (asset_id,),
+        ).fetchone()
+        if row and row["min_mtime"]:
+            return int(row["min_mtime"])
+        return default_ns
 
     def record_asset_alias(self, old_asset_id: str, new_asset_id: str, path: str = "") -> None:
         """记录资产别名映射（如重绘后原 SHA256 映射至新 SHA256）。"""
@@ -1320,17 +1344,21 @@ class CatalogRepository:
         connection: sqlite3.Connection,
         asset_id: str,
         *,
-        preferred_path: Path,
+        preferred_path: Path | str | None = None,
     ) -> AssetRecord:
         asset = connection.execute(
             "SELECT * FROM assets WHERE asset_id=?", (asset_id,)
         ).fetchone()
         if asset is None:
             raise KeyError(f"Catalog 中找不到资产：{asset_id}")
-        path_row = connection.execute(
-            "SELECT * FROM asset_paths WHERE path_key=? AND asset_id=?",
-            (normalize_path_key(preferred_path), asset_id),
-        ).fetchone()
+        path_row = None
+        if preferred_path:
+            p_key = normalize_path_key(preferred_path)
+            if p_key:
+                path_row = connection.execute(
+                    "SELECT * FROM asset_paths WHERE (path_key=? OR path=?) AND asset_id=?",
+                    (p_key, str(preferred_path), asset_id),
+                ).fetchone()
         if path_row is None:
             path_row = connection.execute(
                 "SELECT * FROM asset_paths WHERE asset_id=? ORDER BY available DESC, rowid LIMIT 1",
@@ -1442,8 +1470,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def normalize_path_key(path: Path) -> str:
-    return str(path.expanduser().resolve()).casefold()
+def normalize_path_key(path: Path | str | None) -> str:
+    if not path:
+        return ""
+    try:
+        return str(Path(path).expanduser().resolve()).casefold()
+    except Exception:
+        return str(path).casefold()
 
 
 _path_key = normalize_path_key

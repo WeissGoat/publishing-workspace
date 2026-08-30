@@ -1447,15 +1447,21 @@ def register_library_routes(app: FastAPI) -> None:
 
     @app.get("/api/assets/{asset_id}/details")
     def get_asset_details(asset_id: str):
+        import logging
         from ..catalog.repository import CatalogRepository
         from ..config import load_workspace
 
-        paths, config = load_workspace(app.state.publishing_root)
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        paths, _ = load_workspace(app.state.publishing_root)
+        catalog = getattr(app.state, "catalog", None) or CatalogRepository(paths.catalog, backups_dir=paths.backups)
         assets = catalog.assets_by_ids([asset_id])
         asset = assets.get(asset_id)
         if asset is None:
-            raise HTTPException(status_code=404, detail="找不到资产记录")
+            resolved_id = catalog.resolve_asset_id(asset_id)
+            if resolved_id and resolved_id != asset_id:
+                assets = catalog.assets_by_ids([resolved_id])
+                asset = assets.get(resolved_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail=f"找不到资产记录：{asset_id}")
 
         p = Path(asset.path)
         gen_info = _extract_image_file_metadata(p)
@@ -1489,6 +1495,25 @@ def register_library_routes(app: FastAPI) -> None:
         paths, _ = load_workspace(app.state.publishing_root)
         catalog = getattr(app.state, "catalog", None) or CatalogRepository(paths.catalog, backups_dir=paths.backups)
         return {"asset_id": asset_id, "snapshots": catalog.snapshots_for_asset(asset_id)}
+
+    @app.get("/api/assets/{asset_id}/related")
+    def get_asset_related(asset_id: str):
+        from ..catalog.repository import CatalogRepository
+        from ..config import load_workspace
+
+        paths, _ = load_workspace(app.state.publishing_root)
+        catalog = getattr(app.state, "catalog", None) or CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        assets = catalog.assets_by_ids([asset_id])
+        asset = assets.get(asset_id)
+        seed = None
+        if asset and asset.path and Path(asset.path).is_file():
+            meta = _extract_image_file_metadata(Path(asset.path))
+            seed = meta.get("seed")
+        return catalog.related_assets_for_asset(
+            asset_id,
+            seed=seed,
+            extract_metadata_fn=_extract_image_file_metadata,
+        )
 
     @app.post("/api/assets/{asset_id}/reveal")
     def reveal_asset_file(asset_id: str):

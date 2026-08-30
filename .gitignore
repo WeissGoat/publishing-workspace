@@ -11,3 +11,5 @@ examples/workspace/logs/
 logs/
 models/
 tmp/
+.publishing/
+examples/**/.publishing/

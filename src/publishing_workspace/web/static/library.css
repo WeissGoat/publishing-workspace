@@ -2157,6 +2157,275 @@ input[type="search"]::-webkit-search-results-decoration {
   color: #fff;
 }
 
+/* ================= 🖼️ Lightbox 关联图片组件样式 (同批 / 同Seed / 邻近生图) ================= */
+.lb-related-section {
+  display: flex;
+  flex-direction: column;
+}
+.lb-related-tabs {
+  display: flex;
+  gap: 4px;
+  background: #11161d;
+  padding: 3px;
+  border-radius: 6px;
+  border: 1px solid #233041;
+  margin-top: 4px;
+}
+.lb-rel-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.lb-rel-tab-btn:hover {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.05);
+}
+.lb-rel-tab-btn.active {
+  background: #0ea5e9;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.lb-rel-tab-btn .rel-tab-count {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.lb-related-list-wrap {
+  max-height: 260px;
+  min-height: 48px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-top: 8px;
+  padding-right: 2px;
+}
+.lb-related-list-wrap::-webkit-scrollbar {
+  width: 5px;
+}
+.lb-related-list-wrap::-webkit-scrollbar-track {
+  background: #10151c;
+}
+.lb-related-list-wrap::-webkit-scrollbar-thumb {
+  background: #2d3748;
+  border-radius: 3px;
+}
+.lb-related-list-wrap::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+.lb-related-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lb-related-empty {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 11px;
+  color: #64748b;
+  background: #11161d;
+  border-radius: 6px;
+  border: 1px dashed #263140;
+}
+
+.lb-related-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #131922;
+  border: 1px solid #233041;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  position: relative;
+}
+.lb-related-card:hover {
+  background: #17202b;
+  border-color: #38bdf8;
+}
+
+.lb-related-thumb-wrap {
+  width: 50px;
+  height: 50px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #0b0f14;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 1px solid #263242;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lb-related-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.15s ease;
+}
+.lb-related-thumb-wrap:hover .lb-related-thumb-img {
+  transform: scale(1.08);
+}
+
+.lb-related-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lb-related-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.lb-related-name:hover {
+  color: #38bdf8;
+}
+
+.lb-related-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #64748b;
+}
+.lb-related-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.lb-related-snaps-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+}
+.lb-related-snap-chip {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #1e2735;
+  color: #94a3b8;
+  border: 1px solid #334155;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+.lb-related-snap-chip:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.lb-related-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: flex-end;
+}
+.lb-rel-view-btn {
+  padding: 3px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #1e2633;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.lb-rel-view-btn:hover {
+  background: #334155;
+  color: #fff;
+}
+
+.lb-rel-jump-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #1b222d;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.lb-rel-jump-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* 多快照悬浮下拉菜单 */
+.lb-rel-popover {
+  position: absolute;
+  right: 6px;
+  top: calc(100% + 2px);
+  z-index: 120;
+  background: #182230;
+  border: 1px solid #3b4e68;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  padding: 4px 0;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+}
+.lb-rel-popover-item {
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #cbd5e1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  transition: background 0.1s ease;
+}
+.lb-rel-popover-item:hover {
+  background: #0284c7;
+  color: #ffffff;
+}
+
+.lb-related-footer-hint {
+  font-size: 10px;
+  color: #64748b;
+  text-align: center;
+  margin-top: 6px;
+  padding: 4px;
+  border-top: 1px dashed #263140;
+}
+
 /* ================= 瀑布流目标卡片精准定位高亮脉冲动画 ================= */
 @keyframes locatePulse {
   0% {
