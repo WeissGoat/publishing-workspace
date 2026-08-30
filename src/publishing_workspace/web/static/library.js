@@ -3962,6 +3962,7 @@
   // ✨ AI 局部重绘 (Inpaint) 编辑器与 Split Slider 对比组件
   // =====================================================================
   const inpaintEditor = {
+    currentAssetId: null,
     canvasBg: null,
     canvasMask: null,
     canvasCursor: null,
@@ -4084,7 +4085,17 @@
   }
 
   /** 加载指定资产到 Inpaint 画布 */
-  function loadAssetToInpaint(assetId) {
+  function loadAssetToInpaint(assetId, forceReload = false) {
+    if (!forceReload && inpaintEditor.currentAssetId === assetId && inpaintEditor.loaded) {
+      // 相同素材切回重绘 Tab 时，完整保留已有 Mask、候选结果、提示词输入，仅自适应重绘尺寸
+      requestAnimationFrame(() => {
+        fitInpaintCanvasToWrap();
+        fitInpaintCompareToWrap();
+      });
+      return;
+    }
+
+    inpaintEditor.currentAssetId = assetId;
     inpaintEditor.loaded = false;
     inpaintEditor.undoStack = [];
     inpaintEditor.redoStack = [];
@@ -5971,6 +5982,8 @@
       if (inpaintEditor.sessionId) {
         handleInpaintDiscard();
       }
+      inpaintEditor.currentAssetId = null;
+      inpaintEditor.loaded = false;
       switchLightboxMode("view");
     });
   }

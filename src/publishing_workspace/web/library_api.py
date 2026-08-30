@@ -1640,8 +1640,9 @@ def register_library_routes(app: FastAPI) -> None:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         except Exception as exc:
-            logger.error("AI 局部重绘生成失败: %s", exc)
-            raise HTTPException(status_code=500, detail=f"局部重绘生成失败: {exc}")
+            err_detail = str(exc).strip() or repr(exc)
+            logger.error("AI 局部重绘生成失败: %s", err_detail, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"局部重绘生成失败: {err_detail}")
 
     @app.get("/api/inpaint-cache/{session_id}/{filename}")
     def get_inpaint_cache_image(session_id: str, filename: str):

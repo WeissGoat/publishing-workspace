@@ -237,12 +237,20 @@ class InpaintService:
 
         # 串行逐张生成 count 张候选图 (一张接一张生成，避免瞬时高并发)
         candidates: list[InpaintCandidate] = []
+        last_err: Exception | None = None
         for i in range(count):
             logger.info("开始生成 Inpaint 候选图 %d/%d (asset_id=%s)...", i + 1, count, asset_id)
-            cand = await _gen_one(i)
-            candidates.append(cand)
+            try:
+                cand = await _gen_one(i)
+                candidates.append(cand)
+            except Exception as exc:
+                last_err = exc
+                logger.warning("生成第 %d/%d 张 Inpaint 候选图异常: %s", i + 1, count, exc)
             if i < count - 1:
                 await asyncio.sleep(0.3)
+
+        if not candidates:
+            raise RuntimeError(f"全部候选图生成失败: {last_err}")
 
         # 保存 session 元数据与 mask
         (session_dir / "mask.png").write_bytes(mask_bytes)
