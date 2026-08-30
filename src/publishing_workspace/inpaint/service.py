@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -349,6 +350,21 @@ class InpaintService:
                     if p.is_file():
                         all_target_paths.add(p)
 
+        # 3.5 自动备份原图（保存到 workspace/backups/inpaint 目录，防止误覆写）
+        backup_path_str: str | None = None
+        try:
+            backup_dir = paths.backups / "inpaint"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            asset_sha = asset_id.split(":")[-1] if ":" in asset_id else asset_id
+            now_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            backup_file = backup_dir / f"{now_str}_{asset_sha[:16]}_{asset_path.name}"
+            orig_raw_bytes = asset_path.read_bytes()
+            backup_file.write_bytes(orig_raw_bytes)
+            backup_path_str = str(backup_file)
+            logger.info("📦 局部重绘前原图已安全备份至: %s (size=%d)", backup_file, len(orig_raw_bytes))
+        except Exception as exc:
+            logger.warning("备份原图失败（不中断重绘覆盖）: %s", exc)
+
         # 4. 原子覆写所有关联的原图物理文件
         for target_p in all_target_paths:
             try:
@@ -411,11 +427,12 @@ class InpaintService:
         self.cleanup_session(paths, session_id)
 
         logger.info(
-            "✅ 局部重绘成功覆写原图: asset_id=%s -> new_asset_id=%s path=%s size=%d",
+            "✅ 局部重绘成功覆写原图: asset_id=%s -> new_asset_id=%s path=%s size=%d backup=%s",
             asset_id,
             new_asset_id,
             asset_path,
             stat.st_size,
+            backup_path_str,
         )
 
         return {
@@ -423,6 +440,7 @@ class InpaintService:
             "old_asset_id": asset_id,
             "new_asset_id": new_asset_id,
             "path": str(asset_path),
+            "backup_path": backup_path_str,
             "size_bytes": stat.st_size,
             "mtime": int(stat.st_mtime),
             "width": new_asset.image.width if new_asset.image else 0,

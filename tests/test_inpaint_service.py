@@ -134,6 +134,13 @@ async def test_inpaint_service_generate_and_apply(tmp_path: Path):
         pixel = current_img.getpixel((32, 32))
         assert pixel == (255, 0, 0)
 
+    # 4. 验证原图备份文件存在且内容为重绘前的绿色原图
+    assert apply_result.get("backup_path") is not None
+    backup_file = Path(apply_result["backup_path"])
+    assert backup_file.is_file()
+    with Image.open(backup_file) as bk_img:
+        assert bk_img.getpixel((32, 32)) == (0, 128, 0)
+
 
 @pytest.mark.anyio
 async def test_inpaint_client_retry_on_429(monkeypatch):
