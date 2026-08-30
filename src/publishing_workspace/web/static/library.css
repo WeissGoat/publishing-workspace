@@ -2274,7 +2274,7 @@ input[type="search"]::-webkit-search-results-decoration {
 }
 
 .lb-related-list-wrap {
-  max-height: 380px;
+  max-height: 420px;
   min-height: 52px;
   overflow-y: auto;
   overflow-x: hidden;

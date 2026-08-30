@@ -796,7 +796,7 @@ class CatalogRepository:
                             "height": cand_rec.image.height if cand_rec.image else None,
                             "snapshots": snaps,
                         })
-                        if len(same_seed_items) >= 10:
+                        if len(same_seed_items) >= 100:
                             break
 
         # 3. 优先级 3：👤 同角色 + 时间邻近 + 同 action_group (Time Adjacent)
@@ -820,7 +820,7 @@ class CatalogRepository:
                         "  AND an1.asset_id != ? AND ap.modified_ns BETWEEN ? AND ? "
                         "GROUP BY an1.asset_id "
                         "ORDER BY ABS(MIN(ap.modified_ns) - ?) ASC "
-                        "LIMIT 16",
+                        "LIMIT 200",
                         (target_character, target_action_group, asset_id, low_ns, high_ns, target_earliest_ns),
                     ).fetchall()
                 else:
@@ -832,7 +832,7 @@ class CatalogRepository:
                         "  AND an1.asset_id != ? AND ap.modified_ns BETWEEN ? AND ? "
                         "GROUP BY an1.asset_id "
                         "ORDER BY ABS(MIN(ap.modified_ns) - ?) ASC "
-                        "LIMIT 16",
+                        "LIMIT 200",
                         (target_character, asset_id, low_ns, high_ns, target_earliest_ns),
                     ).fetchall()
 
@@ -848,7 +848,7 @@ class CatalogRepository:
                     adj_candidates.append((time_diff_sec, c_id, cand_earliest_ns))
 
             total_adjacent_count = len(adj_candidates)
-            top_adjacent = adj_candidates[:8]
+            top_adjacent = adj_candidates[:100]
 
             if top_adjacent:
                 top_adj_ids = [x[1] for x in top_adjacent]
