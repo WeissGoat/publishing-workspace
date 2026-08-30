@@ -233,6 +233,7 @@ class _PrecomputedSearchEntry:
     facet_warnings: list[str]
     sort_key: tuple
     combined_text: str
+    earliest_time_ns: int = 0
 
 
 _SEARCH_ENTRIES_CACHE: dict[tuple[str, int, str | None], list[_PrecomputedSearchEntry]] = {}
@@ -405,6 +406,7 @@ class AssetSearchService:
         # 单个快照
         single_import_id = norm_key
         assets = catalog_inst.assets_for_import(single_import_id)
+        earliest_time_map = catalog_inst.get_earliest_asset_times_ns([a.asset_id for a in assets])
         action_config = config.classification.action_resolution
         action_resolver = ActionNodeValueResolver(
             design_root=action_config.design_root,
@@ -424,6 +426,7 @@ class AssetSearchService:
             combined_text = " ".join(
                 [asset.display_name, *[value for items in values.values() for value in items]]
             ).casefold()
+            earliest_ns = earliest_time_map.get(asset.asset_id) or asset.fingerprint.modified_ns
             entries.append(
                 _PrecomputedSearchEntry(
                     asset=asset,
@@ -432,6 +435,7 @@ class AssetSearchService:
                     facet_warnings=facet_warnings,
                     sort_key=sort_key,
                     combined_text=combined_text,
+                    earliest_time_ns=earliest_ns,
                 )
             )
 
@@ -522,12 +526,12 @@ class AssetSearchService:
             matched_entries.reverse()
         elif filters.sort_by == "time_desc":
             matched_entries.sort(
-                key=lambda e: (e.asset.fingerprint.modified_ns, e.asset.asset_id),
+                key=lambda e: (e.earliest_time_ns, e.asset.asset_id),
                 reverse=True,
             )
         elif filters.sort_by == "time_asc":
             matched_entries.sort(
-                key=lambda e: (e.asset.fingerprint.modified_ns, e.asset.asset_id),
+                key=lambda e: (e.earliest_time_ns, e.asset.asset_id),
             )
         elif filters.sort_by == "name_asc":
             matched_entries.sort(

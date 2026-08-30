@@ -282,3 +282,14 @@ def test_facets_with_multiple_import_ids(tmp_path: Path):
     assert facets_multi["clothing"] == ["nude"]
 
 
+def test_search_sort_by_earliest_timestamp(tmp_path: Path):
+    paths, _, assets = seed_catalog(tmp_path)
+    # assets[0] and assets[1]
+    res_desc = AssetSearchService().search(tmp_path, AssetSearchFilter(sort_by="time_desc"))
+    assert len(res_desc) == 2
+
+    res_asc = AssetSearchService().search(tmp_path, AssetSearchFilter(sort_by="time_asc"))
+    assert len(res_asc) == 2
+
+
+

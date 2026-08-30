@@ -909,6 +909,37 @@ class CatalogRepository:
             return int(row["min_mtime"])
         return default_ns
 
+    def get_earliest_asset_times_ns(
+        self,
+        asset_ids: Collection[str] | None = None,
+    ) -> dict[str, int]:
+        """批量获取资产的最早时间戳（聚合所有副本的 MIN(modified_ns)）。"""
+        result: dict[str, int] = {}
+        with self.connection() as conn:
+            if asset_ids is not None:
+                clean_ids = [str(aid).strip() for aid in asset_ids if str(aid).strip()]
+                if not clean_ids:
+                    return result
+                for chunk in _chunks(clean_ids):
+                    ph = ",".join("?" for _ in chunk)
+                    rows = conn.execute(
+                        f"SELECT asset_id, MIN(modified_ns) AS min_ns FROM asset_paths "
+                        f"WHERE asset_id IN ({ph}) AND available=1 AND modified_ns > 0 "
+                        f"GROUP BY asset_id",
+                        chunk,
+                    ).fetchall()
+                    for r in rows:
+                        result[str(r["asset_id"])] = int(r["min_ns"])
+            else:
+                rows = conn.execute(
+                    "SELECT asset_id, MIN(modified_ns) AS min_ns FROM asset_paths "
+                    "WHERE available=1 AND modified_ns > 0 "
+                    "GROUP BY asset_id"
+                ).fetchall()
+                for r in rows:
+                    result[str(r["asset_id"])] = int(r["min_ns"])
+        return result
+
     def record_asset_alias(self, old_asset_id: str, new_asset_id: str, path: str = "") -> None:
         """记录资产别名映射（如重绘后原 SHA256 映射至新 SHA256）。"""
         if not old_asset_id or not new_asset_id or old_asset_id == new_asset_id:
