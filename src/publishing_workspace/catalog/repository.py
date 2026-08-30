@@ -651,6 +651,33 @@ class CatalogRepository:
                     current = nxt
                 else:
                     break
+
+            # 自动自愈历史重绘别名：若当前 ID 在 asset_paths 中无有效路径，尝试从 import_items 查找物理文件并关联当前最新 asset_id
+            path_exists = connection.execute(
+                "SELECT 1 FROM asset_paths WHERE asset_id=? LIMIT 1", (current,)
+            ).fetchone()
+            if path_exists is None:
+                imp_row = connection.execute(
+                    "SELECT resolved_path FROM import_items WHERE asset_id=? ORDER BY rowid DESC LIMIT 1",
+                    (current,),
+                ).fetchone()
+                if imp_row and imp_row["resolved_path"]:
+                    r_path = Path(imp_row["resolved_path"])
+                    if r_path.is_file():
+                        path_key = normalize_path_key(r_path)
+                        cur_row = connection.execute(
+                            "SELECT asset_id FROM asset_paths WHERE path_key=? OR path=?",
+                            (path_key, str(r_path)),
+                        ).fetchone()
+                        if cur_row and cur_row["asset_id"] and cur_row["asset_id"] != current:
+                            discovered_id = str(cur_row["asset_id"])
+                            connection.execute(
+                                "INSERT INTO asset_aliases(old_asset_id, new_asset_id, path, created_at) "
+                                "VALUES (?, ?, ?, ?) "
+                                "ON CONFLICT(old_asset_id) DO UPDATE SET new_asset_id=excluded.new_asset_id, path=excluded.path",
+                                (current, discovered_id, str(r_path), utc_now_iso()),
+                            )
+                            current = discovered_id
             return current
 
     def _ensure_asset_aliases_table(self, connection: sqlite3.Connection) -> None:
@@ -730,19 +757,15 @@ class CatalogRepository:
                 p_path = Path(source_row["resolved_path"]) if source_row["resolved_path"] else None
                 active_asset_id = resolved_id
 
-                # 若当前 active_asset_id 在 assets 表已不存在，尝试通过物理路径获取最新的 asset_id
+                # 检查物理路径在 asset_paths 中当前的活动 asset_id
                 if p_path and p_path.is_file():
-                    asset_exists = connection.execute(
-                        "SELECT 1 FROM assets WHERE asset_id=?", (active_asset_id,)
+                    path_key = normalize_path_key(p_path)
+                    cur_row = connection.execute(
+                        "SELECT asset_id FROM asset_paths WHERE path_key=? OR path=?",
+                        (path_key, str(p_path)),
                     ).fetchone()
-                    if asset_exists is None:
-                        path_key = normalize_path_key(p_path)
-                        cur_row = connection.execute(
-                            "SELECT asset_id FROM asset_paths WHERE path_key=? OR path=?",
-                            (path_key, str(p_path)),
-                        ).fetchone()
-                        if cur_row:
-                            active_asset_id = cur_row["asset_id"]
+                    if cur_row and cur_row["asset_id"]:
+                        active_asset_id = str(cur_row["asset_id"])
 
                 try:
                     record = self._asset_from_db(
@@ -1079,6 +1102,15 @@ class CatalogRepository:
                 "SELECT * FROM asset_paths WHERE asset_id=? ORDER BY available DESC, rowid LIMIT 1",
                 (asset_id,),
             ).fetchone()
+        if path_row is None and preferred_path and Path(preferred_path).is_file():
+            stat = Path(preferred_path).stat()
+            path_row = {
+                "path": str(preferred_path),
+                "size": stat.st_size,
+                "modified_ns": stat.st_mtime_ns,
+            }
+        elif path_row is None:
+            raise KeyError(f"Catalog 中找不到资产可用路径：{asset_id}")
         node_rows = connection.execute(
             "SELECT role, node_index, node_id, ref FROM asset_nodes "
             "WHERE asset_id=? ORDER BY role, node_index, rowid",
