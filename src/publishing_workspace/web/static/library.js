@@ -160,6 +160,7 @@
     selectedCountBadge: document.getElementById("selected-count-badge"),
     selectAllVisibleBtn: document.getElementById("select-all-visible-btn"),
     clearSelectionBtn: document.getElementById("clear-selection-btn"),
+    newSubFromSelectionBtn: document.getElementById("new-sub-from-selection-btn"),
     addToSetBtn: document.getElementById("add-to-set-btn"),
     galleryBatchBar: document.getElementById("gallery-batch-bar"),
     batchSelectedCount: document.getElementById("batch-selected-count"),
@@ -168,6 +169,7 @@
     batchBtnPost: document.getElementById("batch-btn-post"),
     batchBtnUnpost: document.getElementById("batch-btn-unpost"),
     batchBtnTag: document.getElementById("batch-btn-tag"),
+    batchBtnNewSub: document.getElementById("batch-btn-new-sub"),
     batchBtnAddSet: document.getElementById("batch-btn-add-set"),
     batchBtnCopyPaths: document.getElementById("batch-btn-copy-paths"),
     batchBtnClear: document.getElementById("batch-btn-clear"),
@@ -5660,6 +5662,60 @@
     clearAllAssetSelection();
   });
 
+  function createSubmissionFromSelection() {
+    if (!state.selectedAssetIds.size) {
+      showNotice("请先勾选需要新建投稿的素材", "warning");
+      return;
+    }
+
+    // 如果当前已有正在编辑的内容，提示用户是否覆盖重置
+    if (
+      state.currentSubmission.task_id ||
+      (state.currentSubmission.sets.all && state.currentSubmission.sets.all.length > 0 && state.currentSubmission.title && state.currentSubmission.title.trim())
+    ) {
+      if (!confirm("当前正在编辑已有投稿，确定以此选中素材重置并新建投稿吗？")) {
+        return;
+      }
+    }
+
+    const selectedList = Array.from(state.selectedAssetIds);
+    const count = selectedList.length;
+
+    // 1. 初始化全新的 Submission 编辑状态
+    resetSubmissionEditor();
+
+    // 2. 将选中的素材置入该投稿的 all 集合与 post 集合
+    state.currentSubmission.sets.all = [...selectedList];
+    state.currentSubmission.sets.post = [...selectedList];
+
+    // 若当前快照选择有效，记录 source_import_id
+    if (state.filters.import_ids && state.filters.import_ids.length === 1 && state.filters.import_ids[0] !== "__all__") {
+      state.currentSubmission.source_import_id = state.filters.import_ids[0];
+    }
+
+    // 3. 同步表单与集合 UI
+    syncSubmissionFormUI();
+
+    // 4. 清除瀑布流多选选中态
+    clearAllAssetSelection();
+
+    // 5. 自动触发基于选中素材的智能标题与标签推荐
+    fetchMetadataSuggestions(selectedList, true);
+
+    // 6. 提示并平滑滚动聚焦到投稿编辑器
+    showNotice(`✓ 已成功以 ${count} 张选中素材创建全新投稿`, "success");
+    if (elements.submissionForm) {
+      elements.submissionForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    if (elements.submissionTitle) {
+      elements.submissionTitle.focus();
+    }
+  }
+
+  if (elements.newSubFromSelectionBtn) {
+    elements.newSubFromSelectionBtn.addEventListener("click", createSubmissionFromSelection);
+  }
+
   elements.addToSetBtn.addEventListener("click", () => {
     if (!state.selectedAssetIds.size) {
       showNotice("请先勾选需要加入的素材", "warning");
@@ -6480,6 +6536,9 @@
   }
   if (elements.batchBtnTag) {
     elements.batchBtnTag.addEventListener("click", () => handleBatchTagging());
+  }
+  if (elements.batchBtnNewSub) {
+    elements.batchBtnNewSub.addEventListener("click", createSubmissionFromSelection);
   }
   if (elements.batchBtnAddSet) {
     elements.batchBtnAddSet.addEventListener("click", () => {

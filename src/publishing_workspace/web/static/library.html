@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Publishing Workspace 素材库与投稿</title>
-  <link rel="stylesheet" href="/library.css?v=20260831-03">
+  <link rel="stylesheet" href="/library.css?v=20260906-01">
 </head>
 <body>
   <main class="app-shell">
@@ -199,6 +199,7 @@
             <span id="selected-count-badge" class="muted">已选 0 项</span>
             <button id="select-all-visible-btn" class="secondary-button compact-button" type="button">全选当前</button>
             <button id="clear-selection-btn" class="text-button" type="button">清选</button>
+            <button id="new-sub-from-selection-btn" class="secondary-button compact-button" type="button" title="以当前勾选素材创建全新投稿">➕ 新建投稿</button>
             <button id="add-to-set-btn" class="primary-button compact-button" type="button">加入当前集合</button>
           </div>
         </div>
@@ -502,6 +503,7 @@
       <button id="batch-btn-post" class="batch-action-btn" type="button" title="批量标记为已投稿">📮 标记已投稿</button>
       <button id="batch-btn-unpost" class="batch-action-btn" type="button" title="批量取消已投稿">📥 标记未投稿</button>
       <button id="batch-btn-tag" class="batch-action-btn" type="button" title="批量为选中图片打标签">🏷️ 批量打标签</button>
+      <button id="batch-btn-new-sub" class="batch-action-btn btn-new-sub" type="button" title="以当前选中素材创建全新投稿">➕ 新建投稿</button>
       <button id="batch-btn-add-set" class="batch-action-btn" type="button" title="将选中图片批量加入投稿集">📑 加入投稿集</button>
       <button id="batch-btn-copy-paths" class="batch-action-btn" type="button" title="复制选中文件的完整物理路径">📋 复制路径</button>
       <button id="batch-btn-clear" class="batch-action-btn btn-close-batch" type="button" title="取消多选 (Esc)">✕ 取消 (Esc)</button>
@@ -898,6 +900,6 @@
     </div>
   </dialog>
 
-  <script src="/library.js?v=20260831-03" defer></script>
+  <script src="/library.js?v=20260906-01" defer></script>
 </body>
 </html>

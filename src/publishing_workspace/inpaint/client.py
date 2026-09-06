@@ -237,7 +237,7 @@ class NovelAIInpaintClient:
 
         max_retries = 3
         for attempt in range(max_retries + 1):
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds, trust_env=False) as client:
                 resp = await client.post(NOVELAI_IMAGE_URL, headers=headers, files=files)
                 if resp.status_code == 429:
                     if attempt < max_retries:

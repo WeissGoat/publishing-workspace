@@ -4798,6 +4798,17 @@ input[type="search"]::-webkit-search-results-decoration {
 .batch-action-btn:active {
   transform: translateY(0);
 }
+.batch-action-btn.btn-new-sub {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+  font-weight: 700;
+}
+.batch-action-btn.btn-new-sub:hover {
+  background: rgba(14, 165, 233, 0.38);
+  border-color: rgba(56, 189, 248, 0.7);
+  color: #ffffff;
+}
 .batch-action-btn.btn-close-batch {
   background: rgba(239, 68, 68, 0.16);
   border-color: rgba(239, 68, 68, 0.3);
