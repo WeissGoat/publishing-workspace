@@ -190,9 +190,7 @@
   }
 
   async function loadPlan(month) {
-    state.month = month;
-    elements.monthPicker.value = month;
-    elements.calendarTitle.textContent = `${month} 投稿排期`;
+    if (!month) return;
     elements.newEntryBtn.disabled = true;
     clearNotice();
 
@@ -201,7 +199,11 @@
       if (!res.ok) {
         throw new Error(`加载计划失败 (${res.status})`);
       }
-      state.plan = await res.json();
+      const newPlan = await res.json();
+      state.month = month;
+      state.plan = newPlan;
+      if (elements.monthPicker) elements.monthPicker.value = month;
+      if (elements.calendarTitle) elements.calendarTitle.textContent = `${month} 投稿排期`;
       if (Array.isArray(state.plan.entries)) {
         state.plan.entries.sort((a, b) => (a.scheduled_at || "").localeCompare(b.scheduled_at || ""));
       }
@@ -409,6 +411,8 @@
     if (!state.plan) return;
     clearNotice();
 
+    const targetMonth = targetDate.slice(0, 7);
+
     try {
       const res = await fetch(`/api/plans/${state.month}/entries/${entryId}/date`, {
         method: "PATCH",
@@ -422,13 +426,19 @@
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail?.message || `移动日期失败 (${res.status})`);
       }
-      state.plan = await res.json();
+      const resultPlan = await res.json();
       showNotice(`已将排期移动至 ${targetDate}`, "info");
-      renderCalendarGrid();
-      if (state.selectedEntryId === entryId) {
-        const updated = (state.plan.entries || []).find((e) => e.entry_id === entryId);
-        if (updated) selectEntry(updated);
+      if (targetMonth !== state.month) {
+        await loadPlan(targetMonth);
+      } else {
+        state.plan = resultPlan;
+        renderCalendarGrid();
+        if (state.selectedEntryId === entryId) {
+          const updated = (state.plan.entries || []).find((e) => e.entry_id === entryId);
+          if (updated) selectEntry(updated);
+        }
       }
+      loadSubmissionsList();
     } catch (err) {
       showNotice(err.message, "error");
     }
@@ -462,7 +472,8 @@
         throw new Error(data.detail?.message || data.detail || `排期失败 (${res.status})`);
       }
       showNotice(`🎉 已成功将【${sub.title || taskId}】安排在 ${dateStr} 20:00`, "info");
-      await loadPlan(state.month);
+      const targetMonth = dateStr.slice(0, 7);
+      await loadPlan(targetMonth);
       await loadSubmissionsList();
     } catch (err) {
       showNotice(`排期失败: ${err.message}`, "error");
@@ -1174,11 +1185,17 @@
         throw new Error(errData.detail?.message || `保存排期失败 (${res.status})`);
       }
 
-      state.plan = await res.json();
+      const resultPlan = await res.json();
       showNotice(isEdit ? "排期已更新" : "排期已创建", "info");
-      renderCalendarGrid();
-      const updated = (state.plan.entries || []).find((x) => x.entry_id === targetEntryId);
-      if (updated) selectEntry(updated);
+      const targetMonth = dateVal.slice(0, 7);
+      if (targetMonth !== state.month) {
+        await loadPlan(targetMonth);
+      } else {
+        state.plan = resultPlan;
+        renderCalendarGrid();
+        const updated = (state.plan.entries || []).find((x) => x.entry_id === targetEntryId);
+        if (updated) selectEntry(updated);
+      }
       loadSubmissionsList();
     } catch (err) {
       showNotice(err.message, "error");

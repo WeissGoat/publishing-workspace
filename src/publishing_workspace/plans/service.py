@@ -81,6 +81,19 @@ class ScheduleService:
         plan = self.repository.load(plan_paths)
         self._ensure_editable(plan)
         self._ensure_revision(plan, expected_revision)
+
+        # 检查是否跨月：若 entry.scheduled_at 属于另一个月份，自动路由到目标月份
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(plan.timezone)
+        entry_month = entry.scheduled_at.astimezone(tz).strftime("%Y-%m")
+        if entry_month != month:
+            logger.info("排期条目跨月新增路由：from=%s to=%s (entry_id=%s)", month, entry_month, entry.entry_id)
+            target_plan = self.get_or_create_plan(root, entry_month)
+            # 如果原计划中已有相同 ID，清理掉
+            if any(item.entry_id == entry.entry_id for item in plan.entries):
+                self.delete_entry(root, month, entry.entry_id, expected_revision=expected_revision)
+            return self.add_entry(root, entry_month, entry)
+
         if any(item.entry_id == entry.entry_id for item in plan.entries):
             raise ValueError(f"entry_id 已存在：{entry.entry_id}")
         updated = plan.model_copy(update={"entries": [*plan.entries, entry]})
@@ -104,6 +117,21 @@ class ScheduleService:
         plan = self.repository.load(plan_paths)
         self._ensure_editable(plan)
         self._ensure_revision(plan, expected_revision)
+
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(plan.timezone)
+        entry_month = entry.scheduled_at.astimezone(tz).strftime("%Y-%m")
+        if entry_month != month:
+            logger.info("排期条目跨月更新路由：from=%s to=%s (entry_id=%s)", month, entry_month, entry.entry_id)
+            # 从原计划中移除
+            self.delete_entry(root, month, entry.entry_id, expected_revision=expected_revision)
+            # 路由到目标月份
+            target_plan = self.get_or_create_plan(root, entry_month)
+            if any(item.entry_id == entry.entry_id for item in target_plan.entries):
+                return self.update_entry(root, entry_month, entry)
+            else:
+                return self.add_entry(root, entry_month, entry)
+
         if not any(item.entry_id == entry.entry_id for item in plan.entries):
             raise KeyError(f"投稿不存在：{entry.entry_id}")
         updated = plan.model_copy(
@@ -135,23 +163,34 @@ class ScheduleService:
         plan = self.repository.load(plan_paths)
         self._ensure_editable(plan)
         self._ensure_revision(plan, expected_revision)
-        self._ensure_target_date(plan, target_date)
-        if not any(item.entry_id == entry_id for item in plan.entries):
+
+        target_month = target_date.strftime("%Y-%m")
+        target_item = next((item for item in plan.entries if item.entry_id == entry_id), None)
+        if target_item is None:
             raise KeyError(f"投稿不存在：{entry_id}")
+
+        new_scheduled_at = target_item.scheduled_at.replace(
+            year=target_date.year,
+            month=target_date.month,
+            day=target_date.day,
+        )
+        new_entry = target_item.model_copy(update={"scheduled_at": new_scheduled_at})
+
+        if target_month != month:
+            logger.info("排期条目跨月移动：from=%s to=%s (entry_id=%s, target_date=%s)", month, target_month, entry_id, target_date)
+            # 从原计划中删除
+            self.delete_entry(root, month, entry_id, expected_revision=expected_revision)
+            # 加入目标计划
+            target_plan = self.get_or_create_plan(root, target_month)
+            if any(item.entry_id == entry_id for item in target_plan.entries):
+                return self.update_entry(root, target_month, new_entry)
+            else:
+                return self.add_entry(root, target_month, new_entry)
+
         updated = plan.model_copy(
             update={
                 "entries": [
-                    item.model_copy(
-                        update={
-                            "scheduled_at": item.scheduled_at.replace(
-                                year=target_date.year,
-                                month=target_date.month,
-                                day=target_date.day,
-                            )
-                        }
-                    )
-                    if item.entry_id == entry_id
-                    else item
+                    new_entry if item.entry_id == entry_id else item
                     for item in plan.entries
                 ]
             }

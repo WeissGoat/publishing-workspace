@@ -177,9 +177,10 @@ class PixivUploadService:
         cookie: str,
         token: str = "",
         proxy: str | None = None,
-        poll_timeout_seconds: int = 60,
+        poll_timeout_seconds: int = 120,
         title_fallback: str = "",
         default_tags: list[str] | None = None,
+        upload_timeout: int | tuple[int, int] = (20, 180),
     ) -> str:
         """执行 Pixiv 上传与转码轮询，成功返回作品 PID (illust_id)，失败抛出异常。"""
         clean_cookie = cookie.strip()
@@ -240,7 +241,7 @@ class PixivUploadService:
                 headers=headers,
                 data=payload,
                 files=files,
-                timeout=45,
+                timeout=upload_timeout,
             )
         finally:
             for fh in file_handles:
@@ -300,7 +301,8 @@ class PixivUploadService:
         *,
         force_rebuild: bool = False,
         force_republish: bool = False,
-        poll_timeout_seconds: int = 60,
+        poll_timeout_seconds: int = 120,
+        upload_timeout: int | tuple[int, int] = (20, 180),
     ) -> PixivUploadResult:
         """主入口：为指定 Task 执行导出检查、上传 Pixiv 并持久化结果。"""
         paths, config = load_workspace(root)
@@ -387,6 +389,7 @@ class PixivUploadService:
                 poll_timeout_seconds=poll_timeout_seconds,
                 title_fallback=submission.title,
                 default_tags=config.pixiv.default_tags,
+                upload_timeout=upload_timeout,
             )
 
             # 回写持久化

@@ -127,3 +127,20 @@ def test_suggest_tags_from_assets():
     assert "魔法少女" in tags["character"]
     assert any("foreplay" in a or "oral" in a for a in tags["action"])
     assert any("水着" in a for a in tags["action"])
+
+
+def test_prepare_image_for_suggest_raw(tmp_path):
+    from PIL import Image
+    from publishing_workspace.submissions.pixiv_metadata import prepare_image_for_suggest
+
+    img_path = tmp_path / "test_raw.png"
+    img = Image.new("RGBA", (2000, 1500), (255, 0, 0, 128))
+    img.save(img_path)
+
+    raw_bytes = img_path.read_bytes()
+    fname, fbytes, mime = prepare_image_for_suggest(img_path)
+    assert fname == "test_raw.png"
+    assert mime == "image/png"
+    assert fbytes == raw_bytes  # Exact unmodified raw bytes
+
+

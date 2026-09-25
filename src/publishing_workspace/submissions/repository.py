@@ -227,11 +227,11 @@ class SubmissionRepository:
         for plan_file in sorted(plans_dir.glob("*/plan.yaml")):
             if not plan_file.is_file():
                 continue
+            month = plan_file.parent.name
             try:
-                data = yaml.safe_load(plan_file.read_text(encoding="utf-8-sig")) or {}
-                if not isinstance(data, dict):
-                    continue
-                plan = MonthlyPlan.model_validate(data)
+                from ..plans.paths import PlanPaths
+                from ..plans.repository import PlanRepository
+                plan = PlanRepository().load(PlanPaths(plans_dir.parent, month), auto_heal=True)
                 for entry in plan.entries:
                     if entry.content.kind == "task":
                         task_id = str(entry.content.task_id)
@@ -242,8 +242,26 @@ class SubmissionRepository:
                             publish=bool(entry.execution.publish),
                         )
                         result.setdefault(task_id, []).append(ref)
-            except Exception:
-                continue
+            except Exception as exc:
+                # 二级容错：手动解析条目
+                try:
+                    data = yaml.safe_load(plan_file.read_text(encoding="utf-8-sig")) or {}
+                    entries = data.get("entries") if isinstance(data, dict) else []
+                    if isinstance(entries, list):
+                        for item in entries:
+                            if isinstance(item, dict) and item.get("content", {}).get("kind") == "task":
+                                task_id = str(item["content"].get("task_id") or "").strip()
+                                sched_at = str(item.get("scheduled_at") or "").strip()
+                                if task_id and sched_at:
+                                    ref = SubmissionScheduleRef(
+                                        plan_id=month,
+                                        entry_id=str(item.get("entry_id") or f"entry-{task_id}"),
+                                        scheduled_at=sched_at,
+                                        publish=bool(item.get("execution", {}).get("publish", False)),
+                                    )
+                                    result.setdefault(task_id, []).append(ref)
+                except Exception:
+                    pass
         return result
 
 

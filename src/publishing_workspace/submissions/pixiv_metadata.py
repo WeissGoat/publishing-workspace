@@ -222,21 +222,22 @@ def resolve_proxies(proxy: str | None = None) -> dict[str, str] | None:
 
 
 def prepare_image_for_suggest(image_path: Path) -> tuple[str, bytes, str]:
-    """生成用于 Pixiv 识别的小尺寸预览图字节（<=1024px, JPEG），极大缩短上传时间与代理超时几率。"""
-    try:
-        import io
-        from PIL import Image
+    """直接读取原图文件字节与真实 MIME 类型，不进行任何预处理或压缩，将原始无损图片发送至 Pixiv 识别。"""
+    ext = image_path.suffix.lower()
+    if ext == ".png":
+        mime = "image/png"
+    elif ext in (".jpg", ".jpeg"):
+        mime = "image/jpeg"
+    elif ext == ".webp":
+        mime = "image/webp"
+    elif ext == ".gif":
+        mime = "image/gif"
+    else:
+        import mimetypes
+        mime = mimetypes.guess_type(str(image_path))[0] or "application/octet-stream"
 
-        with Image.open(image_path) as im:
-            im.thumbnail((1024, 1024))
-            buf = io.BytesIO()
-            im.convert("RGB").save(buf, format="JPEG", quality=85)
-            return "preview.jpg", buf.getvalue(), "image/jpeg"
-    except Exception:
-        ext = image_path.suffix.lower()
-        mime = "image/png" if ext == ".png" else "image/jpeg"
-        with open(image_path, "rb") as f:
-            return image_path.name, f.read(), mime
+    with open(image_path, "rb") as f:
+        return image_path.name, f.read(), mime
 
 
 def create_pixiv_session(proxies: dict[str, str] | None = None, max_retries: int = 5) -> Any:
@@ -268,9 +269,9 @@ def suggest_tags_from_pixiv_sync(
     cookie: str = "",
     token: str = "",
     proxy: str | None = None,
-    timeout: int = 30,
+    timeout: int = 60,
 ) -> list[str]:
-    """通过 Pixiv 官方 suggest_tags_by_image API 推荐标签（带自动重试与图像压缩）。"""
+    """通过 Pixiv 官方 suggest_tags_by_image API 推荐标签（发送原始无损图像）。"""
     path = Path(image_path)
     if not path.is_file():
         logger.warning("Pixiv suggest_tags: 文件不存在：%s", image_path)

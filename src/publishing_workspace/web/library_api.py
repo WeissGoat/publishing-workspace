@@ -78,8 +78,24 @@ def _sync_submission_schedule(
     from zoneinfo import ZoneInfo
     from ..plans.models import ExecutionPolicy, ScheduleEntry, TaskContent
     from ..service import PublishingService
+    from ..config import load_workspace
+    from ..plans.paths import PlanPaths
 
+    paths, _ = load_workspace(root)
+    svc = PublishingService()
+
+    # 1. 如果 scheduled_at 为空，从所有月度计划中清除对此任务的排期
     if not scheduled_at or not scheduled_at.strip():
+        if paths.plans.is_dir():
+            for plan_dir in paths.plans.iterdir():
+                if plan_dir.is_dir() and (plan_dir / "plan.yaml").is_file():
+                    try:
+                        p = svc.schedule_show(root, plan_dir.name)
+                        for e in p.entries:
+                            if isinstance(e.content, TaskContent) and e.content.task_id == task_id:
+                                svc.schedule_delete_entry(root, plan_dir.name, e.entry_id, expected_revision=p.revision)
+                    except Exception:
+                        pass
         return
 
     clean_sched = scheduled_at.strip()
@@ -91,15 +107,25 @@ def _sync_submission_schedule(
     except Exception:
         return
 
-    svc = PublishingService()
+    # 2. 从所有非目标月份的计划中清理旧条目（防止跨月修改遗留孤立条目）
+    if paths.plans.is_dir():
+        for plan_dir in paths.plans.iterdir():
+            if plan_dir.is_dir() and plan_dir.name != month_str and (plan_dir / "plan.yaml").is_file():
+                try:
+                    p = svc.schedule_show(root, plan_dir.name)
+                    for e in p.entries:
+                        if isinstance(e.content, TaskContent) and e.content.task_id == task_id:
+                            logger.info("从旧月份计划清理已跨月的排期：%s -> %s (task_id=%s)", plan_dir.name, month_str, task_id)
+                            svc.schedule_delete_entry(root, plan_dir.name, e.entry_id, expected_revision=p.revision)
+                except Exception:
+                    pass
+
+    # 3. 将排期条目写入目标月份计划
     try:
         try:
             plan = svc.schedule_show(root, month_str)
         except KeyError:
             plan = svc.schedule_create(root, month_str)
-
-        if plan.status == "locked":
-            return
 
         existing_entry = None
         for e in plan.entries:
@@ -110,7 +136,7 @@ def _sync_submission_schedule(
         exec_policy = ExecutionPolicy()
         if existing_entry is not None:
             exec_policy = existing_entry.execution
-        
+
         update_dict = {}
         if publish is not None:
             update_dict["publish"] = publish
@@ -140,8 +166,8 @@ def _sync_submission_schedule(
                 execution=exec_policy,
             )
             svc.schedule_add_entry(root, month_str, new_entry, expected_revision=plan.revision)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("同步任务定时排期失败: task_id=%s - %s", task_id, exc)
 
 
 def _find_task_schedule_info(root: Path, task_id: str) -> dict[str, Any]:
