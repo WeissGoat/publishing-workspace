@@ -10,6 +10,10 @@ dependencies = [
     "fastapi>=0.115",
     "tzdata>=2024.1",
     "uvicorn>=0.30",
+    # Web 局部重绘（inpaint）与 Pixiv 投稿在基础安装中即可使用
+    "httpx>=0.27",
+    "numpy",
+    "requests",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +45,5 @@ pythonpath = ["src"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.27",
     "pytest>=9.1.1",
 ]
