@@ -24,6 +24,7 @@ from ..tasks.paths import TaskPaths
 from ..tasks.repository import TaskRepository
 from ..logging import get_logger
 from .library_api import register_library_routes
+from .query_params import parse_import_ids
 from .thumbnails import THUMBNAIL_MEDIA_TYPE, ensure_thumbnail, thumbnail_width
 
 
@@ -298,18 +299,7 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=20, ge=1, le=100),
     ):
-        parsed_import_ids: list[str] | None = None
-        if import_ids:
-            try:
-                raw_ids = json.loads(import_ids)
-                if isinstance(raw_ids, list):
-                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
-                elif isinstance(raw_ids, str):
-                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
-            except Exception:
-                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
-        elif import_id and import_id != "__all__":
-            parsed_import_ids = [import_id.strip()]
+        parsed_import_ids = parse_import_ids(import_ids, import_id)
 
         return NodeSearchService().search(
             app.state.publishing_root,
@@ -323,18 +313,7 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
 
     @app.get("/api/assets/facets")
     def asset_facets(import_id: str | None = None, import_ids: str | None = None):
-        parsed_import_ids: list[str] | None = None
-        if import_ids:
-            try:
-                raw_ids = json.loads(import_ids)
-                if isinstance(raw_ids, list):
-                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
-                elif isinstance(raw_ids, str):
-                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
-            except Exception:
-                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
-        elif import_id and import_id != "__all__":
-            parsed_import_ids = [import_id.strip()]
+        parsed_import_ids = parse_import_ids(import_ids, import_id)
 
         return AssetSearchService().facets(app.state.publishing_root, import_id=import_id, import_ids=parsed_import_ids)
 

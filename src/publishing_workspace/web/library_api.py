@@ -28,6 +28,7 @@ from ..submissions.repository import SubmissionRepository
 from ..submissions.service import SubmissionService
 from ..tasks.paths import TaskPaths
 from ..tasks.repository import TaskRepository
+from .query_params import parse_id_list, parse_import_ids
 
 
 logger = get_logger(__name__)
@@ -285,40 +286,11 @@ def register_library_routes(app: FastAPI) -> None:
                 for field, values in raw.items()
             }
 
-        parsed_fav_ids: set[str] = set()
-        if favorite_ids:
-            try:
-                raw_fav = json.loads(favorite_ids)
-                if isinstance(raw_fav, list):
-                    parsed_fav_ids = {str(x).strip() for x in raw_fav if str(x).strip()}
-                elif isinstance(raw_fav, str):
-                    parsed_fav_ids = {x.strip() for x in raw_fav.split(",") if x.strip()}
-            except Exception:
-                parsed_fav_ids = {x.strip() for x in favorite_ids.split(",") if x.strip()}
+        parsed_fav_ids = set(parse_id_list(favorite_ids))
 
-        parsed_tags: set[str] = set()
-        if tags:
-            try:
-                raw_tags = json.loads(tags)
-                if isinstance(raw_tags, list):
-                    parsed_tags = {str(x).strip() for x in raw_tags if str(x).strip()}
-                elif isinstance(raw_tags, str):
-                    parsed_tags = {x.strip() for x in raw_tags.split(",") if x.strip()}
-            except Exception:
-                parsed_tags = {x.strip() for x in tags.split(",") if x.strip()}
+        parsed_tags = set(parse_id_list(tags))
 
-        parsed_import_ids: list[str] | None = None
-        if import_ids:
-            try:
-                raw_ids = json.loads(import_ids)
-                if isinstance(raw_ids, list):
-                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
-                elif isinstance(raw_ids, str):
-                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
-            except Exception:
-                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
-        elif import_id and import_id != "__all__":
-            parsed_import_ids = [import_id.strip()]
+        parsed_import_ids = parse_import_ids(import_ids, import_id)
 
         fav_mode = favorite_mode if favorite_mode in {"all", "favorited", "unfavorited"} else "all"
 
@@ -368,18 +340,7 @@ def register_library_routes(app: FastAPI) -> None:
     @app.get("/api/library/facets")
     def library_facets(import_id: str | None = None, import_ids: str | None = None):
         catalog = getattr(app.state, "catalog", None)
-        parsed_import_ids: list[str] | None = None
-        if import_ids:
-            try:
-                raw_ids = json.loads(import_ids)
-                if isinstance(raw_ids, list):
-                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
-                elif isinstance(raw_ids, str):
-                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
-            except Exception:
-                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
-        elif import_id and import_id != "__all__":
-            parsed_import_ids = [import_id.strip()]
+        parsed_import_ids = parse_import_ids(import_ids, import_id)
 
         return AssetSearchService().facets(
             app.state.publishing_root, import_id=import_id, import_ids=parsed_import_ids, catalog=catalog
@@ -1266,18 +1227,7 @@ def register_library_routes(app: FastAPI) -> None:
         marks_map = catalog.cached_asset_marks()
         fav_ids = [asset_id for asset_id, marks in marks_map.items() if "favorite" in marks]
 
-        parsed_import_ids: list[str] | None = None
-        if import_ids:
-            try:
-                raw_ids = json.loads(import_ids)
-                if isinstance(raw_ids, list):
-                    parsed_import_ids = [str(x).strip() for x in raw_ids if str(x).strip() and str(x).strip() != "__all__"]
-                elif isinstance(raw_ids, str):
-                    parsed_import_ids = [x.strip() for x in raw_ids.split(",") if x.strip() and x.strip() != "__all__"]
-            except Exception:
-                parsed_import_ids = [x.strip() for x in import_ids.split(",") if x.strip() and x.strip() != "__all__"]
-        elif import_id and import_id != "__all__":
-            parsed_import_ids = [import_id.strip()]
+        parsed_import_ids = parse_import_ids(import_ids, import_id)
 
         if parsed_import_ids:
             with catalog.connection() as conn:
