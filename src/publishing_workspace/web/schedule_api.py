@@ -4,11 +4,12 @@ import time
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from ..catalog.repository import CatalogRepository
@@ -23,6 +24,7 @@ from ..tasks.paths import TaskPaths
 from ..tasks.repository import TaskRepository
 from ..logging import get_logger
 from .library_api import register_library_routes
+from .thumbnails import THUMBNAIL_MEDIA_TYPE, ensure_thumbnail, thumbnail_width
 
 
 logger = get_logger(__name__)
@@ -386,6 +388,36 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
         if path is None or not Path(path).is_file():
             raise KeyError(f"Catalog 中找不到可预览资产：{asset_id}")
         return FileResponse(path)
+
+    @app.get("/api/assets/{asset_id}/thumbnail")
+    def asset_thumbnail(
+        asset_id: str,
+        request: Request,
+        w: int = Query(default=320, ge=16, le=4096),
+    ):
+        """瀑布流等列表使用的缩略图：按固定档位生成并缓存到 workspace/cache/thumbnails。"""
+        catalog = getattr(app.state, "catalog", None)
+        if catalog is None:
+            paths, _ = load_workspace(app.state.publishing_root)
+            catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+            app.state.catalog = catalog
+        path = catalog.get_asset_path(asset_id)
+        if path is None or not Path(path).is_file():
+            raise KeyError(f"Catalog 中找不到可预览资产：{asset_id}")
+        cache_root = app.state.workspace_paths.cache / "thumbnails"
+        try:
+            thumb = ensure_thumbnail(Path(path), cache_root, asset_id, thumbnail_width(w))
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            logger.warning("缩略图生成失败，回退原图：asset=%s：%s", asset_id, exc)
+            return FileResponse(path)
+
+        stat = thumb.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        # no-cache 让浏览器每次用 ETag 重新验证：原图被局部重绘覆盖后也不会显示旧缩略图
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if etag in request.headers.get("if-none-match", ""):
+            return Response(status_code=304, headers=headers)
+        return FileResponse(thumb, media_type=THUMBNAIL_MEDIA_TYPE, headers=headers)
 
     register_library_routes(app)
 

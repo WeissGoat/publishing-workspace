@@ -479,6 +479,18 @@
     return state.favoritesSet.has(assetId);
   }
 
+  // ================= 缩略图 =================
+
+  // 与后端 THUMBNAIL_WIDTHS 保持一致；客户端先取档，保证同一档位只占一份浏览器缓存
+  const THUMBNAIL_WIDTHS = [320, 640, 960];
+  let currentCardSize = 170;
+
+  function thumbUrl(assetId, cssWidth = currentCardSize) {
+    const px = Math.ceil(cssWidth * (window.devicePixelRatio || 1));
+    const width = THUMBNAIL_WIDTHS.find((w) => px <= w) || THUMBNAIL_WIDTHS[THUMBNAIL_WIDTHS.length - 1];
+    return `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=${width}`;
+  }
+
   // 收藏写入按顺序串行，收藏筛选分页前先等待写入落库（服务端以 Catalog 收藏标记为准）
   let favoriteWriteChain = Promise.resolve();
 
@@ -1450,7 +1462,7 @@
     }
 
     const ratio = item.width && item.height ? `${item.width} / ${item.height}` : "1 / 1";
-    const previewUrl = `/api/assets/${encodeURIComponent(item.asset_id)}/preview`;
+    const previewUrl = thumbUrl(item.asset_id);
 
     const realUsage = (item.usage || []).filter(u => u !== "favorite");
     const hasUsage = realUsage.length > 0;
@@ -2405,7 +2417,7 @@
       return `
         <div class="lb-related-card" data-asset-id="${escapeHtml(item.asset_id)}">
           <div class="lb-related-thumb-wrap" data-action="view-related" data-asset-id="${escapeHtml(item.asset_id)}" title="点击查看详情">
-            <img class="lb-related-thumb-img" src="/api/assets/${encodeURIComponent(item.asset_id)}/preview?v=${Date.now()}" alt="${escapeHtml(item.display_name)}" loading="lazy">
+            <img class="lb-related-thumb-img" src="${thumbUrl(item.asset_id, 200)}" alt="${escapeHtml(item.display_name)}" loading="lazy">
             <button type="button" class="lb-thumb-peek-badge" data-action="hold-peek" data-asset-id="${escapeHtml(item.asset_id)}" title="按住可在左侧大图临时对比">👁️ 对比</button>
           </div>
           <div class="lb-related-info">
@@ -5607,6 +5619,7 @@
   // ================= 瀑布流卡片尺寸调节 =================
   function applyCardSize(sizePx, save = true) {
     const size = Math.max(100, Math.min(400, parseInt(sizePx, 10) || 170));
+    currentCardSize = size;
     if (elements.assetWaterfall) {
       elements.assetWaterfall.style.setProperty("--waterfall-card-size", `${size}px`);
     }

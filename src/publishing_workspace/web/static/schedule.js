@@ -460,7 +460,7 @@
       const usage = asset.usage.length ? `<span class="usage-badge">已用 ${asset.usage.length}</span>` : "";
       const tags = ["character", "action_group", "action"].flatMap((key) => (asset.values[key] || []).slice(0, 1)).join(" · ");
       card.innerHTML = `
-        <img class="thumb preview-trigger" src="${previewUrl(asset.asset_id)}" alt="" data-asset-id="${escapeAttr(asset.asset_id)}" data-caption="${escapeAttr(asset.display_name)}">
+        <img class="thumb preview-trigger" src="${thumbUrl(asset.asset_id)}" alt="" data-asset-id="${escapeAttr(asset.asset_id)}" data-caption="${escapeAttr(asset.display_name)}">
         <div class="asset-main"><div class="asset-name" title="${escapeAttr(asset.display_name)}">${escapeHtml(asset.display_name)}${warning}${usage}</div><div class="asset-tags" title="${escapeAttr(tags)}">${escapeHtml(tags || "无节点信息")}</div></div>
         <div class="asset-actions"><label><input type="checkbox" class="asset-check" data-asset-id="${escapeAttr(asset.asset_id)}"${checked}> 选择</label><button class="preview-trigger" type="button" data-asset-id="${escapeAttr(asset.asset_id)}" data-caption="${escapeAttr(asset.display_name)}">预览</button></div>`;
       elements.assetResults.append(card);
@@ -493,7 +493,7 @@
     item.className = "set-item";
     item.draggable = true;
     item.dataset.assetId = assetId;
-    item.innerHTML = `<img src="${previewUrl(assetId)}" alt=""><span class="set-item-name" title="${escapeAttr(assetId)}">${escapeHtml(assetId)}</span><button class="remove-item" type="button" aria-label="移除" title="移除">&#10005;</button>`;
+    item.innerHTML = `<img src="${thumbUrl(assetId)}" alt=""><span class="set-item-name" title="${escapeAttr(assetId)}">${escapeHtml(assetId)}</span><button class="remove-item" type="button" aria-label="移除" title="移除">&#10005;</button>`;
     item.addEventListener("dragstart", (event) => { state.draggedAssetId = assetId; event.dataTransfer.setData("text/plain", assetId); });
     item.querySelector("img").addEventListener("click", () => openPreview(assetId, assetId));
     item.querySelector(".remove-item").addEventListener("click", () => removeAsset(setName, assetId));
@@ -686,6 +686,7 @@
   function renderAll() { updateControls(); renderCalendar(); renderEditor(); }
 
   function previewUrl(assetId) { return `/api/assets/${encodeURIComponent(assetId)}/preview`; }
+  function thumbUrl(assetId) { return `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=320`; }
   function openPreview(assetId, caption) { elements.previewImage.src = previewUrl(assetId); elements.previewCaption.textContent = caption; elements.previewDialog.showModal(); }
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); }
   function escapeAttr(value) { return escapeHtml(value); }

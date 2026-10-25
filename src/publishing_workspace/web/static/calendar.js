@@ -909,7 +909,7 @@
 
     for (let i = 0; i < assetList.length; i++) {
       const assetId = assetList[i];
-      const thumbUrl = `/api/assets/${encodeURIComponent(assetId)}/preview`;
+      const thumbUrl = `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=320`;
       const item = document.createElement("div");
       item.className = "detail-thumb-item";
       item.title = `点击查看原素材大图 #${i + 1}: ${assetId}`;
