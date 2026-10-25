@@ -257,7 +257,7 @@ _REF_INDEX_LOOKUP_CACHE: dict[tuple[str | None, str, str | None], ActionResoluti
 _MANIFEST_PATH_CACHE: dict[str, Path | None] = {}
 
 
-_GLOBAL_ASSET_ACTION_CACHE: dict[tuple[str, str | None, str], ActionResolution] = {}
+_GLOBAL_ASSET_ACTION_CACHE: dict[tuple[str | None, str, tuple], ActionResolution] = {}
 
 
 class ActionNodeValueResolver:
@@ -289,10 +289,16 @@ class ActionNodeValueResolver:
         return list(resolution.action_values if role == "action" else resolution.group_values)
 
     def _resolve_asset(self, asset: AssetRecord) -> ActionResolution:
+        # 解析结果只取决于 action / action_group 节点，按节点签名而非 asset_id 缓存：
+        # 同一动作的上万张素材共享一次解析，节点随重绘别名继承变化时也不会命中过期结果
         global_key = (
-            asset.asset_id,
             str(self.design_root) if self.design_root else None,
             self.action_root_name,
+            tuple(
+                (node.role, node.id, node.ref, node.index)
+                for node in asset.node_info.nodes
+                if node.role in {"action", "action_group"}
+            ),
         )
         cached = _GLOBAL_ASSET_ACTION_CACHE.get(global_key)
         if cached is not None:

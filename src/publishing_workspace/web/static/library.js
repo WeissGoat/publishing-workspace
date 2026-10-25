@@ -479,6 +479,19 @@
     return state.favoritesSet.has(assetId);
   }
 
+  // 收藏写入按顺序串行，收藏筛选分页前先等待写入落库（服务端以 Catalog 收藏标记为准）
+  let favoriteWriteChain = Promise.resolve();
+
+  // 收藏筛选模式下切换星标后，就地隐藏不再符合条件的卡片
+  function applyClientFilter() {
+    const mode = state.filters.favorite_mode;
+    for (const [assetId, card] of state.cardElements) {
+      const fav = state.favoritesSet.has(assetId);
+      const keep = mode === "all" || (mode === "favorited" ? fav : !fav);
+      card.classList.toggle("hidden", !keep);
+    }
+  }
+
   function toggleFavorite(assetId) {
     if (!assetId) return false;
     const nowFav = !state.favoritesSet.has(assetId);
@@ -490,17 +503,19 @@
     saveFavoritesSet();
 
     // 异步同步至 Catalog 持久化
-    fetch("/api/favorites/toggle", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        asset_id: assetId,
-        import_id: state.filters.import_id || null,
-        favorited: nowFav
-      }),
-    }).catch((err) => {
-      console.warn("异步更新收藏标记失败:", err);
-    });
+    favoriteWriteChain = favoriteWriteChain
+      .then(() => fetch("/api/favorites/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_id: assetId,
+          import_id: state.filters.import_id || null,
+          favorited: nowFav
+        }),
+      }))
+      .catch((err) => {
+        console.warn("异步更新收藏标记失败:", err);
+      });
 
     return nowFav;
   }
@@ -925,9 +940,9 @@
         params.set("posted", "false");
       }
       if (state.filters.favorite_mode !== "all") {
+        // 收藏集合由服务端按 Catalog 标记解析，不再把全部收藏 ID 塞进 URL（收藏多时会超出请求行长度上限）
         params.set("favorite_mode", state.filters.favorite_mode);
-        const favSet = getFavoritesSet();
-        params.set("favorite_ids", JSON.stringify([...favSet]));
+        await favoriteWriteChain;
       }
       const sortBy = (state.filters && state.filters.sort_by) || "order_asc";
       params.set("sort_by", sortBy);

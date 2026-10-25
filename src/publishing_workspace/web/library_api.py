@@ -1252,14 +1252,18 @@ def register_library_routes(app: FastAPI) -> None:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"打开文件所在文件夹失败: {exc}")
 
+    def _shared_catalog() -> CatalogRepository:
+        catalog = getattr(app.state, "catalog", None)
+        if catalog is None:
+            paths, _ = load_workspace(app.state.publishing_root)
+            catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+            app.state.catalog = catalog
+        return catalog
+
     @app.get("/api/favorites")
     def get_favorites(import_id: str | None = None, import_ids: str | None = None):
-        from ..catalog.repository import CatalogRepository
-        from ..config import load_workspace
-
-        paths, _ = load_workspace(app.state.publishing_root)
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
-        marks_map = catalog.all_asset_marks()
+        catalog = _shared_catalog()
+        marks_map = catalog.cached_asset_marks()
         fav_ids = [asset_id for asset_id, marks in marks_map.items() if "favorite" in marks]
 
         parsed_import_ids: list[str] | None = None
@@ -1288,24 +1292,17 @@ def register_library_routes(app: FastAPI) -> None:
 
     @app.post("/api/favorites/toggle")
     async def toggle_favorite_mark(req: Request):
-        from ..catalog.repository import CatalogRepository
-        from ..config import load_workspace
-
         body = await req.json()
         asset_id = str(body.get("asset_id", "")).strip()
         favorited = bool(body.get("favorited", True))
         if not asset_id:
             raise HTTPException(status_code=422, detail="asset_id 不能为空")
 
-        paths, _ = load_workspace(app.state.publishing_root)
-        catalog = CatalogRepository(paths.catalog, backups_dir=paths.backups)
+        catalog = _shared_catalog()
         if favorited:
             catalog.set_asset_marks([asset_id], mark="favorite", note="Web UI favorite")
         else:
-            with catalog.connection() as conn:
-                conn.execute(
-                    "DELETE FROM asset_marks WHERE asset_id=? AND mark='favorite'", (asset_id,)
-                )
+            catalog.remove_asset_marks([asset_id], mark="favorite")
         return {"asset_id": asset_id, "favorited": favorited}
 
     @app.post("/api/library/batch-action")

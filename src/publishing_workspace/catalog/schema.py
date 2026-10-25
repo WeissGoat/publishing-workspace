@@ -1,3 +1,5 @@
+from collections.abc import Collection
+
 SCHEMA_VERSION = 2
 SCHEMA_ID = "publishing-workspace.catalog/v2"
 
@@ -150,14 +152,6 @@ CREATE TABLE IF NOT EXISTS export_states (
     PRIMARY KEY (exporter, view_key)
 );
 
-CREATE TABLE IF NOT EXISTS asset_marks (
-    asset_id TEXT NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
-    mark TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (asset_id, mark)
-);
-CREATE INDEX IF NOT EXISTS idx_asset_marks_mark ON asset_marks(mark);
 
 CREATE TABLE IF NOT EXISTS asset_aliases (
     old_asset_id TEXT PRIMARY KEY,
@@ -167,3 +161,66 @@ CREATE TABLE IF NOT EXISTS asset_aliases (
 );
 CREATE INDEX IF NOT EXISTS idx_asset_aliases_new ON asset_aliases(new_asset_id);
 """
+
+
+ASSET_MARKS_SQL = """
+CREATE TABLE IF NOT EXISTS asset_marks (
+    asset_id TEXT NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
+    mark TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (asset_id, mark)
+);
+CREATE INDEX IF NOT EXISTS idx_asset_marks_mark ON asset_marks(mark);
+"""
+
+
+def _revision_triggers(scope: str, table: str, events: tuple[str, ...]) -> str:
+    return "".join(
+        f"""
+CREATE TRIGGER IF NOT EXISTS trg_rev_{scope}_{table}_{event.lower()}
+AFTER {event} ON {table} BEGIN
+    UPDATE catalog_revisions SET revision = revision + 1 WHERE scope = '{scope}';
+END;
+"""
+        for event in events
+    )
+
+
+_ALL_EVENTS = ("INSERT", "UPDATE", "DELETE")
+
+# 由 SQLite 触发器维护的变更计数器，供内存检索缓存判断是否失效。
+# 触发器对 CLI、Web 和裸 SQL 写入一视同仁，不依赖 WAL 模式下不可靠的文件 mtime。
+# - assets：素材、路径、节点、快照条目与别名，影响检索索引；
+#   imports 的 UPDATE 只是进度计数，不计入，避免导入过程中检索缓存反复失效。
+# - marks：收藏、标签、已投稿等标记，只影响标记与使用索引，不需要重建检索索引。
+_REVISION_TRIGGER_SPECS = (
+    ("assets", "assets", _ALL_EVENTS),
+    ("assets", "asset_paths", _ALL_EVENTS),
+    ("assets", "asset_nodes", _ALL_EVENTS),
+    ("assets", "import_items", _ALL_EVENTS),
+    ("assets", "asset_aliases", _ALL_EVENTS),
+    ("assets", "imports", ("INSERT", "DELETE")),
+    ("marks", "asset_marks", _ALL_EVENTS),
+)
+
+_REVISION_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS catalog_revisions (
+    scope TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO catalog_revisions(scope, revision) VALUES ('assets', 0);
+INSERT OR IGNORE INTO catalog_revisions(scope, revision) VALUES ('marks', 0);
+"""
+
+
+def revision_tracking_sql(existing_tables: Collection[str] | None = None) -> str:
+    """生成计数表与触发器 SQL；传入已有表名时跳过缺失的表（兼容极早期 Catalog）。"""
+    return _REVISION_TABLE_SQL + "".join(
+        _revision_triggers(scope, table, events)
+        for scope, table, events in _REVISION_TRIGGER_SPECS
+        if existing_tables is None or table in existing_tables
+    )
+
+
+SCHEMA_SQL += ASSET_MARKS_SQL + revision_tracking_sql()

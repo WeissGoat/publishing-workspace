@@ -5,9 +5,9 @@ import json
 import os
 import sqlite3
 from collections.abc import Collection, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from PIL import Image
 from pydantic import BaseModel
@@ -27,7 +27,7 @@ from ..models import (
 )
 from ..png_metadata import read_png_text_chunks
 from .migrations import migrate_catalog_v1_to_v2
-from .schema import SCHEMA_ID, SCHEMA_SQL, SCHEMA_VERSION
+from .schema import ASSET_MARKS_SQL, SCHEMA_ID, SCHEMA_SQL, SCHEMA_VERSION, revision_tracking_sql
 
 
 logger = get_logger(__name__)
@@ -37,6 +37,52 @@ class AssetChangedAfterPlanningError(RuntimeError):
     pass
 
 
+class CatalogRevisions(NamedTuple):
+    assets: int
+    marks: int
+
+
+class SearchAssetRow(NamedTuple):
+    """检索索引专用的轻量素材行，避免为上万条记录逐个构造 pydantic 模型。"""
+
+    asset_id: str
+    path: str
+    display_name: str
+    source_order: int
+    width: int
+    height: int
+    image_format: str
+    metadata_format: str
+    reader: str
+    modified_ns: int
+    earliest_time_ns: int
+    warnings: tuple[str, ...]
+    nodes: tuple[tuple[str, str, str, int], ...]
+    """(role, node_id, ref, node_index)，顺序与 assets_for_import 一致。"""
+
+    def to_record(self) -> AssetRecord:
+        """按需构造完整 AssetRecord（检索中仅在派生数据缓存未命中时使用）。"""
+        node_info = ImageNodeInfo(
+            format=self.metadata_format,
+            reader=self.reader,
+            nodes=[
+                ImageNodeRef(role=role, id=node_id or None, ref=ref or None, index=index)
+                for role, node_id, ref, index in self.nodes
+            ],
+            warnings=list(self.warnings),
+        )
+        return AssetRecord(
+            asset_id=self.asset_id,
+            path=self.path,
+            fingerprint=AssetFingerprint(size=0, modified_ns=self.modified_ns, sha256=""),
+            image=AssetImageInfo(width=self.width, height=self.height, format=self.image_format),
+            node_info=node_info,
+            display_name=self.display_name,
+            source_order=self.source_order,
+            warnings=list(self.warnings),
+        )
+
+
 class CatalogIngestResult(BaseModel):
     asset: AssetRecord
     outcome: Literal["reused_path", "reused_content", "parsed_new"]
@@ -44,12 +90,14 @@ class CatalogIngestResult(BaseModel):
 
 _INITIALIZED_CATALOGS: set[str] = set()
 _GLOBAL_ASSET_PATH_CACHE: dict[str, str] = {}
+_ASSET_MARKS_CACHE: dict[str, tuple[int, dict[str, list[str]]]] = {}
 
 
 def clear_catalog_init_cache() -> None:
     """清理 Catalog 初始化与路径内存缓存，用于单元测试重置。"""
     _INITIALIZED_CATALOGS.clear()
     _GLOBAL_ASSET_PATH_CACHE.clear()
+    _ASSET_MARKS_CACHE.clear()
 
 
 class CatalogRepository:
@@ -98,6 +146,8 @@ class CatalogRepository:
         if version == 1:
             backup = migrate_catalog_v1_to_v2(self.path, self.backups_dir)
             logger.warning("Publishing Catalog 已从 v1 升级到 v2，备份：%s", backup)
+            with self.connection() as connection:
+                self._ensure_revision_tracking(connection)
             _INITIALIZED_CATALOGS.add(resolved_key)
             return
         if version != SCHEMA_VERSION:
@@ -107,8 +157,37 @@ class CatalogRepository:
             self._ensure_imports_tags_column(connection)
             self._ensure_performance_indexes(connection)
             self._align_import_items_with_paths(connection)
+            self._ensure_revision_tracking(connection)
 
         _INITIALIZED_CATALOGS.add(resolved_key)
+
+    def _read_revision_rows(self) -> list[tuple[str, int]]:
+        with closing(sqlite3.connect(self.path, timeout=30.0)) as connection:
+            connection.execute("PRAGMA busy_timeout = 30000")
+            return connection.execute("SELECT scope, revision FROM catalog_revisions").fetchall()
+
+    def _ensure_revision_tracking(self, connection: sqlite3.Connection) -> None:
+        """为旧 Catalog 补齐变更计数表与触发器（幂等）。"""
+        # 早期 v2 Catalog 可能缺少 asset_marks / asset_aliases，触发器创建前先补表
+        self._ensure_asset_aliases_table(connection)
+        connection.executescript(ASSET_MARKS_SQL)
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        connection.executescript(revision_tracking_sql(tables))
+
+    def revisions(self) -> CatalogRevisions:
+        """读取 Catalog 变更计数，用于判断内存缓存是否失效（一次轻量查询）。"""
+        try:
+            rows = self._read_revision_rows()
+        except sqlite3.OperationalError:
+            # Catalog 被外部替换为未带计数表的旧文件时自愈一次
+            with self.connection() as connection:
+                self._ensure_revision_tracking(connection)
+            rows = self._read_revision_rows()
+        values = {str(scope): int(revision) for scope, revision in rows}
+        return CatalogRevisions(assets=values.get("assets", 0), marks=values.get("marks", 0))
 
     def _ensure_performance_indexes(self, connection: sqlite3.Connection) -> None:
         try:
@@ -909,6 +988,80 @@ class CatalogRepository:
             return int(row["min_mtime"])
         return default_ns
 
+    def search_rows_for_import(self, import_id: str) -> list[SearchAssetRow]:
+        """读取单个快照的检索行：与 assets_for_import 相同的去重、排序与首选路径规则，
+        并在同一次读取中聚合最早时间（所有可用副本的 MIN(modified_ns)）。"""
+        subquery = "SELECT asset_id FROM import_items WHERE import_id=? AND asset_id IS NOT NULL"
+        with self.connection() as connection:
+            connection.row_factory = None
+            item_rows = connection.execute(
+                "SELECT asset_id, resolved_path, source_order, display_name FROM import_items "
+                "WHERE import_id=? AND asset_id IS NOT NULL ORDER BY source_order",
+                (import_id,),
+            ).fetchall()
+            unique_rows: dict[str, tuple] = {}
+            for row in item_rows:
+                unique_rows.setdefault(row[0], row)
+            if not unique_rows:
+                return []
+
+            assets = {
+                row[0]: row
+                for row in connection.execute(
+                    "SELECT asset_id, width, height, image_format, metadata_format, reader, "
+                    f"warnings_json FROM assets WHERE asset_id IN ({subquery})",
+                    (import_id,),
+                )
+            }
+            paths: dict[str, list[tuple]] = {}
+            for row in connection.execute(
+                "SELECT asset_id, path, modified_ns, available FROM asset_paths "
+                f"WHERE asset_id IN ({subquery}) ORDER BY asset_id, available DESC, rowid",
+                (import_id,),
+            ):
+                paths.setdefault(row[0], []).append(row)
+            nodes: dict[str, list[tuple]] = {}
+            for row in connection.execute(
+                "SELECT asset_id, role, node_id, ref, node_index FROM asset_nodes "
+                f"WHERE asset_id IN ({subquery}) ORDER BY asset_id, role, node_index, rowid",
+                (import_id,),
+            ):
+                nodes.setdefault(row[0], []).append(row[1:])
+
+        result: list[SearchAssetRow] = []
+        for asset_id, (_, resolved_path, source_order, display_name) in unique_rows.items():
+            asset = assets.get(asset_id)
+            if asset is None:
+                raise KeyError(f"Catalog 中找不到资产：{asset_id}")
+            path_rows = paths.get(asset_id)
+            if not path_rows:
+                raise KeyError(f"Catalog 中找不到资产路径：{asset_id}")
+            preferred = str(resolved_path).casefold()
+            path_row = next(
+                (row for row in path_rows if str(row[1]).casefold() == preferred), path_rows[0]
+            )
+            available_times = [row[2] for row in path_rows if row[3] == 1 and row[2] > 0]
+            warnings_json = asset[6]
+            result.append(
+                SearchAssetRow(
+                    asset_id=asset_id,
+                    path=path_row[1],
+                    display_name=display_name,
+                    source_order=source_order,
+                    width=asset[1],
+                    height=asset[2],
+                    image_format=asset[3],
+                    metadata_format=asset[4],
+                    reader=asset[5],
+                    modified_ns=path_row[2],
+                    earliest_time_ns=min(available_times) if available_times else path_row[2],
+                    warnings=tuple(json.loads(warnings_json)) if warnings_json != "[]" else (),
+                    nodes=tuple(nodes.get(asset_id, ())),
+                )
+            )
+            _GLOBAL_ASSET_PATH_CACHE[asset_id] = str(path_row[1])
+        return result
+
     def get_earliest_asset_times_ns(
         self,
         asset_ids: Collection[str] | None = None,
@@ -1413,6 +1566,22 @@ class CatalogRepository:
                 m = str(row["mark"])
                 result.setdefault(aid, []).append(m)
         return result
+
+    def cached_asset_marks(self, marks_revision: int | None = None) -> dict[str, list[str]]:
+        """按 marks 变更计数缓存的标记映射，供检索热路径使用；返回值共享，调用方不得修改。"""
+        revision = marks_revision if marks_revision is not None else self.revisions().marks
+        key = str(self.path.resolve()).casefold()
+        cached = _ASSET_MARKS_CACHE.get(key)
+        if cached is not None and cached[0] == revision:
+            return cached[1]
+        marks = self.all_asset_marks()
+        _ASSET_MARKS_CACHE[key] = (revision, marks)
+        return marks
+
+    def favorite_asset_ids(self) -> set[str]:
+        return {
+            asset_id for asset_id, marks in self.cached_asset_marks().items() if "favorite" in marks
+        }
 
     def set_asset_tags(
         self,
