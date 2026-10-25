@@ -780,6 +780,14 @@ input[type="search"]::-webkit-search-results-decoration {
   margin-top: 12px;
   transition: opacity 0.15s ease;
 }
+/* 分块虚拟化：每个区块是与父容器同列宽的子网格，离开视口较远的区块会摘下卡片、保留占位高度 */
+.asset-waterfall-chunk {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--waterfall-card-size, 170px), 1fr));
+  align-items: start;
+  gap: 12px;
+}
 .asset-waterfall.loading {
   opacity: 0.55;
   pointer-events: none;
@@ -3152,7 +3160,8 @@ input[type="search"]::-webkit-search-results-decoration {
 }
 
 @media (max-width: 620px) {
-  .asset-waterfall { grid-template-columns: repeat(2, 1fr); }
+  .asset-waterfall,
+  .asset-waterfall-chunk { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* 🎨 Pixiv 投稿设定卡片 */

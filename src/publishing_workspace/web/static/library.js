@@ -502,6 +502,7 @@
       const keep = mode === "all" || (mode === "favorited" ? fav : !fav);
       card.classList.toggle("hidden", !keep);
     }
+    rebuildWaterfall();
   }
 
   function toggleFavorite(assetId) {
@@ -906,7 +907,7 @@
       state.loadingPage = false;
       state.loadedAssets.clear();
       state.cardElements.clear();
-      elements.assetWaterfall.innerHTML = "";
+      resetWaterfall();
       if (elements.endOfResults) elements.endOfResults.classList.add("hidden");
       if (elements.importProgressWrap) elements.importProgressWrap.classList.add("hidden");
       updateGalleryProgress(true);
@@ -918,6 +919,7 @@
 
     state.loadingPage = true;
     const currentToken = state.requestToken;
+    let pageLoaded = false;
     if (elements.loadingSpinner) elements.loadingSpinner.classList.remove("hidden");
     updateGalleryProgress(true);
 
@@ -976,6 +978,7 @@
         : (state.offset + page.items.length);
 
       if (page.items.length === 0 && state.loadedAssets.size === 0) {
+        resetWaterfall();
         elements.assetWaterfall.innerHTML = `
           <div class="empty-snapshot-guide">
             <div class="empty-guide-icon">🔍</div>
@@ -984,14 +987,17 @@
           </div>
         `;
       } else {
+        refreshCardMetrics();
+        const newCards = [];
         for (const item of page.items) {
           if (!state.loadedAssets.has(item.asset_id)) {
             state.loadedAssets.set(item.asset_id, item);
             const card = renderAssetCard(item);
             state.cardElements.set(item.asset_id, card);
-            elements.assetWaterfall.appendChild(card);
+            newCards.push(card);
           }
         }
+        appendWaterfallCards(newCards);
       }
 
       // 更新角标状态
@@ -1004,6 +1010,7 @@
       if (!state.hasMore && state.loadedAssets.size > 0) {
         if (elements.endOfResults) elements.endOfResults.classList.remove("hidden");
       }
+      pageLoaded = true;
     } catch (err) {
       console.error("加载素材分页异常:", err);
       if (currentToken === state.requestToken) {
@@ -1014,7 +1021,18 @@
         state.loadingPage = false;
         if (elements.loadingSpinner) elements.loadingSpinner.classList.add("hidden");
         updateGalleryProgress(false);
+        if (pageLoaded && state.hasMore) requestAnimationFrame(loadMoreIfSentinelNear);
       }
+    }
+  }
+
+  // IntersectionObserver 只在相交状态变化时回调：一页内容不足一屏或布局变化后哨兵仍在视口附近时，
+  // 不会再次触发。每页加载完成后主动检查一次，必要时继续加载下一页。
+  function loadMoreIfSentinelNear() {
+    const sentinel = elements.scrollSentinel;
+    if (!sentinel || state.loadingPage || !state.hasMore || !state.filters.import_id) return;
+    if (sentinel.getBoundingClientRect().top - window.innerHeight < SCROLL_PRELOAD_MARGIN_PX) {
+      loadAssetsPage(false);
     }
   }
 
@@ -1072,6 +1090,7 @@
       if (elements.importProgressWrap) elements.importProgressWrap.classList.add("hidden");
       if (elements.galleryProgressBanner) elements.galleryProgressBanner.classList.add("hidden");
       if (elements.assetCountBadge) elements.assetCountBadge.textContent = "";
+      resetWaterfall();
       elements.assetWaterfall.innerHTML = `
         <div id="empty-snapshot-guide" class="empty-snapshot-guide">
           <div class="empty-guide-icon">📂</div>
@@ -1453,6 +1472,203 @@
     }
   }
 
+  // ================= 瀑布流分块虚拟化 =================
+  // 上万张卡片同时挂在 DOM 上时，滚动每帧的命中测试与绘制遍历都随卡片数线性增长。
+  // 卡片按「列数 × WATERFALL_CHUNK_ROWS 行」分块：离开视口较远的区块记下高度后摘下卡片节点，
+  // 回到附近时再挂回。卡片节点始终保存在 state.cardElements 与 waterfall.order 中，
+  // 直接修改卡片节点（收藏星标、角标等）的逻辑在卡片被摘下时同样生效。
+  const WATERFALL_CHUNK_ROWS = 8;
+  const WATERFALL_KEEP_MARGIN = "1600px 0px";
+  const WATERFALL_ROW_GAP = 12;
+  const SCROLL_PRELOAD_MARGIN_PX = 400;
+
+  const waterfall = {
+    order: [], // 全部已载入卡片（含被收藏筛选隐藏的），按载入顺序
+    chunks: [], // { el, cards, attached }
+    observer: null,
+    width: 0,
+  };
+  const cardMetrics = { colWidth: 0, infoHeight: 30 };
+
+  function waterfallColumnCount() {
+    const tracks = getComputedStyle(elements.assetWaterfall).gridTemplateColumns;
+    return Math.max(1, tracks.split(" ").filter((t) => t && t !== "none").length);
+  }
+
+  function refreshCardMetrics() {
+    const wf = elements.assetWaterfall;
+    if (!wf) return;
+    const firstTrack = parseFloat(getComputedStyle(wf).gridTemplateColumns);
+    if (firstTrack > 0) cardMetrics.colWidth = firstTrack;
+    const info = wf.querySelector(".asset-card .asset-info");
+    if (info && info.offsetHeight > 0) cardMetrics.infoHeight = info.offsetHeight;
+  }
+
+  function estimateCardHeight(item) {
+    const colWidth = cardMetrics.colWidth || currentCardSize;
+    const ratio = item && item.width && item.height ? item.height / item.width : 1;
+    // 2px 为卡片上下边框
+    return Math.round(colWidth * ratio + cardMetrics.infoHeight + 2);
+  }
+
+  function estimateChunkHeight(cards, cols) {
+    let total = 0;
+    for (let i = 0; i < cards.length; i += cols) {
+      let rowHeight = 0;
+      for (const card of cards.slice(i, i + cols)) {
+        rowHeight = Math.max(rowHeight, estimateCardHeight(state.loadedAssets.get(card.dataset.assetId)));
+      }
+      total += rowHeight + (i > 0 ? WATERFALL_ROW_GAP : 0);
+    }
+    return total;
+  }
+
+  function ensureWaterfallObserver() {
+    if (waterfall.observer) return;
+    waterfall.observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const chunk = entry.target.__chunk;
+        if (!chunk) continue;
+        if (entry.isIntersecting) attachChunk(chunk);
+        else detachChunk(chunk);
+      }
+    }, { rootMargin: WATERFALL_KEEP_MARGIN });
+  }
+
+  // 手动挂载后重新 observe：IntersectionObserver 只在相交状态变化时回调，重新 observe 会立即给出当前状态
+  function reobserveChunk(chunk) {
+    waterfall.observer.unobserve(chunk.el);
+    waterfall.observer.observe(chunk.el);
+  }
+
+  function createChunk(attached = true) {
+    ensureWaterfallObserver();
+    const el = document.createElement("div");
+    el.className = "asset-waterfall-chunk";
+    const chunk = { el, cards: [], attached };
+    el.__chunk = chunk;
+    waterfall.chunks.push(chunk);
+    elements.assetWaterfall.appendChild(el);
+    waterfall.observer.observe(el);
+    return chunk;
+  }
+
+  function detachChunk(chunk) {
+    if (!chunk.attached) return;
+    const height = chunk.el.offsetHeight;
+    if (!height) return; // 未参与布局（如页面隐藏）时保持挂载
+    chunk.el.style.height = `${height}px`;
+    chunk.el.replaceChildren();
+    chunk.attached = false;
+  }
+
+  function attachChunk(chunk) {
+    if (chunk.attached) return;
+    chunk.el.append(...chunk.cards);
+    chunk.el.style.height = "";
+    chunk.attached = true;
+    syncCardSelectionState(chunk.cards);
+  }
+
+  function resetWaterfall() {
+    if (waterfall.observer) waterfall.observer.disconnect();
+    waterfall.observer = null;
+    waterfall.order = [];
+    waterfall.chunks = [];
+    elements.assetWaterfall.replaceChildren();
+  }
+
+  function placeCardsInChunks(cards) {
+    const chunkSize = waterfallColumnCount() * WATERFALL_CHUNK_ROWS;
+    for (const card of cards) {
+      let chunk = waterfall.chunks[waterfall.chunks.length - 1];
+      if (!chunk || chunk.cards.length >= chunkSize) chunk = createChunk();
+      if (!chunk.attached) {
+        attachChunk(chunk);
+        reobserveChunk(chunk);
+      }
+      chunk.cards.push(card);
+      card.__chunk = chunk;
+      chunk.el.appendChild(card);
+    }
+  }
+
+  function appendWaterfallCards(cards) {
+    waterfall.order.push(...cards);
+    waterfall.width = elements.assetWaterfall.clientWidth;
+    placeCardsInChunks(cards.filter((card) => !card.classList.contains("hidden")));
+  }
+
+  // 按当前显示顺序返回卡片（不含被收藏筛选隐藏的）
+  function displayedWaterfallCards() {
+    return waterfall.order.filter((card) => !card.classList.contains("hidden"));
+  }
+
+  function firstVisibleCardId() {
+    for (const chunk of waterfall.chunks) {
+      if (!chunk.attached) continue;
+      for (const card of chunk.cards) {
+        const rect = card.getBoundingClientRect();
+        if (rect.bottom > 0 && rect.top < window.innerHeight) return card.dataset.assetId;
+      }
+    }
+    return null;
+  }
+
+  // 列数、列宽变化或收藏筛选隐藏卡片后重新分块；只挂载视口附近的区块，其余按估算高度占位
+  function rebuildWaterfall() {
+    if (!waterfall.order.length) return;
+    const anchorId = firstVisibleCardId();
+    const anchorTop = anchorId ? state.cardElements.get(anchorId).getBoundingClientRect().top : null;
+    const cards = displayedWaterfallCards();
+    if (waterfall.observer) waterfall.observer.disconnect();
+    waterfall.observer = null;
+    waterfall.chunks = [];
+    elements.assetWaterfall.replaceChildren();
+    waterfall.width = elements.assetWaterfall.clientWidth;
+    refreshCardMetrics();
+
+    const cols = waterfallColumnCount();
+    const chunkSize = cols * WATERFALL_CHUNK_ROWS;
+    const anchorIndex = anchorId ? cards.findIndex((c) => c.dataset.assetId === anchorId) : 0;
+    const anchorChunk = Math.floor(Math.max(0, anchorIndex) / chunkSize);
+    for (let i = 0, n = 0; i < cards.length; i += chunkSize, n++) {
+      const slice = cards.slice(i, i + chunkSize);
+      const nearAnchor = Math.abs(n - anchorChunk) <= 1;
+      const chunk = createChunk(nearAnchor);
+      chunk.cards = slice;
+      slice.forEach((card) => { card.__chunk = chunk; });
+      if (nearAnchor) {
+        chunk.el.append(...slice);
+        syncCardSelectionState(slice);
+      } else {
+        chunk.el.style.height = `${estimateChunkHeight(slice, cols)}px`;
+      }
+    }
+    if (anchorId && anchorTop !== null) {
+      const card = state.cardElements.get(anchorId);
+      if (card && card.isConnected) window.scrollBy(0, card.getBoundingClientRect().top - anchorTop);
+    }
+  }
+
+  function ensureCardAttached(card) {
+    const chunk = card && card.__chunk;
+    if (chunk && !chunk.attached) {
+      attachChunk(chunk);
+      reobserveChunk(chunk);
+    }
+  }
+
+  let waterfallResizeTimer = null;
+  function scheduleWaterfallRebuild(force = false) {
+    clearTimeout(waterfallResizeTimer);
+    waterfallResizeTimer = setTimeout(() => {
+      const width = elements.assetWaterfall ? elements.assetWaterfall.clientWidth : 0;
+      if (width && (force || width !== waterfall.width)) rebuildWaterfall();
+    }, 150);
+  }
+  window.addEventListener("resize", () => scheduleWaterfallRebuild());
+
   function renderAssetCard(item) {
     const card = document.createElement("div");
     card.className = "asset-card";
@@ -1599,6 +1815,7 @@
     if (card) {
       card.classList.add("is-focused-card");
       if (smoothScroll) {
+        ensureCardAttached(card);
         card.scrollIntoView({ behavior: "smooth", block: "center" });
       }
       if (withSpotlight && elements.assetWaterfall) {
@@ -1646,7 +1863,7 @@
 
   function selectRangeTo(targetAssetId) {
     if (!targetAssetId) return;
-    const cards = Array.from(elements.assetWaterfall.querySelectorAll(".asset-card:not(.filtered-out)"));
+    const cards = displayedWaterfallCards();
     if (!state.lastSelectedAssetId) {
       toggleAssetSelection(targetAssetId, true);
       return;
@@ -1687,11 +1904,18 @@
       }
     }
 
-    // 遍历瀑布流中已渲染的卡片，同步其选中态和次序徽章与勾选圆标
-    elements.assetWaterfall.querySelectorAll(".asset-card").forEach((card) => {
+    // 只同步当前挂载的卡片；被虚拟化摘下的区块在重新挂载时同步
+    syncCardSelectionState(elements.assetWaterfall.querySelectorAll(".asset-card"));
+  }
+
+  // 同步卡片的选中态、次序徽章与勾选圆标
+  function syncCardSelectionState(cards) {
+    const selectedOrder = new Map();
+    for (const id of state.selectedAssetIds) selectedOrder.set(id, selectedOrder.size + 1);
+    for (const card of cards) {
       const aid = card.dataset.assetId;
-      const idx = selectedArr.indexOf(aid);
-      const isSel = idx !== -1;
+      const orderNum = selectedOrder.get(aid);
+      const isSel = orderNum !== undefined;
 
       card.classList.toggle("selected", isSel);
       card.classList.toggle("is-batch-selected", isSel);
@@ -1703,7 +1927,6 @@
 
       let orderBadge = card.querySelector(".asset-order-badge");
       if (isSel) {
-        const orderNum = idx + 1;
         if (!orderBadge) {
           orderBadge = document.createElement("span");
           orderBadge.className = "asset-order-badge";
@@ -1717,10 +1940,10 @@
           if (wrap) wrap.appendChild(orderBadge);
         }
         orderBadge.innerHTML = `<span class="badge-num">${orderNum}</span>`;
-      } else {
-        if (orderBadge) orderBadge.remove();
+      } else if (orderBadge) {
+        orderBadge.remove();
       }
-    });
+    }
   }
 
   function clearAllAssetSelection() {
@@ -1858,7 +2081,7 @@
   }
 
   function navigateWaterfallFocus(direction) {
-    const cards = Array.from(elements.assetWaterfall.querySelectorAll(".asset-card:not(.filtered-out)"));
+    const cards = displayedWaterfallCards();
     if (!cards.length) return;
     if (!state.focusedAssetId) {
       setFocusedCard(cards[0].dataset.assetId, true, false);
@@ -1877,6 +2100,7 @@
       targetIdx = Math.min(cards.length - 1, curIdx + 1);
     } else if (direction === "ArrowUp" || direction === "ArrowDown") {
       const curCard = cards[curIdx];
+      ensureCardAttached(curCard);
       const curRect = curCard.getBoundingClientRect();
       const curCenterX = curRect.left + curRect.width / 2;
 
@@ -1884,7 +2108,8 @@
       let minDistance = Infinity;
 
       for (let i = 0; i < cards.length; i++) {
-        if (i === curIdx) continue;
+        // 上下方向只在已挂载（视口附近）的卡片中寻找，避免遍历上万张卡片读取布局
+        if (i === curIdx || !cards[i].isConnected) continue;
         const r = cards[i].getBoundingClientRect();
         const isUp = direction === "ArrowUp" && r.bottom < curRect.top + 10;
         const isDown = direction === "ArrowDown" && r.top > curRect.bottom - 10;
@@ -5041,7 +5266,7 @@
       if (oldCard) {
         oldCard.dataset.assetId = newAssetId;
         const img = oldCard.querySelector("img");
-        if (img) img.src = bustUrl;
+        if (img) img.src = thumbUrl(newAssetId);
         const cb = oldCard.querySelector(".asset-checkbox");
         if (cb) cb.value = newAssetId;
         state.cardElements.delete(oldAssetId);
@@ -5622,6 +5847,7 @@
     currentCardSize = size;
     if (elements.assetWaterfall) {
       elements.assetWaterfall.style.setProperty("--waterfall-card-size", `${size}px`);
+      scheduleWaterfallRebuild(true);
     }
     if (elements.cardSizeSlider) {
       elements.cardSizeSlider.value = String(size);
@@ -5681,7 +5907,7 @@
           loadAssetsPage(false);
         }
       },
-      { rootMargin: "400px" }
+      { rootMargin: `${SCROLL_PRELOAD_MARGIN_PX}px` }
     );
     scrollObserver.observe(elements.scrollSentinel);
   }
@@ -6623,7 +6849,7 @@
       updateLightboxButtonStates(aid, nowFav);
 
       // 同步卡片视图上的金星
-      const card = elements.assetWaterfall.querySelector(`[data-asset-id="${aid}"]`);
+      const card = state.cardElements.get(aid);
       if (card) {
         const starBtn = card.querySelector(".asset-star-btn");
         if (starBtn) {
@@ -6659,7 +6885,7 @@
           updateLightboxButtonStates(aid, null, nextPosted);
 
           // 同步更新瀑布流卡片上的角标
-          const card = elements.assetWaterfall.querySelector(`[data-asset-id="${aid}"]`);
+          const card = state.cardElements.get(aid);
           if (card) {
             let badge = card.querySelector(".asset-usage-badge");
             if (nextPosted) {
