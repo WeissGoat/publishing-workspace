@@ -514,23 +514,33 @@ cd F:\my_project\new\tags_machine\refactor\tools\publishing_workspace
 uv run publishing-workspace web G:\ai_publish --host 127.0.0.1 --port 61302 --log-level info
 ```
 
-Publishing Workspace 拆分为两个独立的页面：
+Web 界面是一个 Vue 3 单页应用，包含两个页面（深色为主，右上角可切换浅色）：
 
-1. **日历排期页 (`/calendar` 或 `/`)**：
-   - 专注文档排期编排与日期管理；
-   - 支持月份切换、月历视图、拖拽投稿卡片改期；
-   - 关联选择已有投稿任务（Task），点击可直达素材库编辑；
-   - 兼容旧 inline 散图排期，支持跳转素材库进行懒转换。
+1. **月度计划 (`/calendar` 或 `/`，支持 `?month=YYYY-MM`)**：
+   - 左侧待排期投稿（搜索、拖到日历即排期，默认 20:00）；中间周一起始的月历，条目可拖拽改期（含跨月）、双击空白日期新建；
+   - 右侧排期表单（关联投稿、到期自动发布、允许延迟补发）与投稿详情（立即发布、定时发布、选集 / 导出成品缩略图与大图预览、压缩包下载）；
+   - 兼容旧 inline 散图排期，可跳转素材库转换为正式投稿。
 
-2. **素材库与投稿管理页 (`/library`)**：
-   - 三栏布局：左侧筛选（Import 快照、Node 节点、`classify.yaml` Facets）、中间瀑布流素材（无限滚动、aspect-ratio 预占位防抖）、右侧 Submission 投稿编辑器；
-   - 支持选择素材加入 `all`/`post`/`cover` 集合，集合顺序支持上下移动调整；
-   - 保存投稿时自动补齐（`post` 默认等于 `all`，`cover` 默认等于 `post[0]`），生成对应 `tasks/<task_id>` 及 `submission.yaml`；
-   - 支持单 worker 队列后台导出发布包，实时展示阶段与文件进度，并支持直接打开导出目录。
+2. **素材库与投稿 (`/library`)**：
+   - 图片优先布局：左侧可折叠筛选栏（快照多选、关键词、收藏 / 投稿状态、标签、Node 节点、`classify.yaml` 属性），中间虚拟化瀑布流（上万张保持流畅），右侧可收起的「投稿篮」；
+   - 多选（Ctrl / Shift / 批量模式）后可批量收藏、标记已投稿、打标签，或新建投稿 / 加入 `all`、`post`、`cover` 集合；
+   - 大图查看：生成参数、关联快照与关联图片、局部重绘（Inpaint）、导出成品手动打码；
+   - 投稿篮：集合拖拽排序、Pixiv 元数据与 1:1 缩略图裁剪、排期、立即 / 定时发布、导出发布包。
 
 兼容旧入口：
-- 旧 `http://127.0.0.1:61302/schedule.html` 继续保留，支持历史页面访问；
+- 旧 `/schedule.html` 重定向到 `/calendar`；
 - 旧 `/api/assets/search`（返回数组，上限 1000）、`/api/tasks` 及 inline 计划格式完全向下兼容。
+
+#### 前端开发
+
+前端源码在 `frontend/`，构建产物提交在 `src/publishing_workspace/web/static/app/`，因此运行 `publishing-workspace web` 不需要 Node。修改前端后：
+
+```powershell
+cd frontend
+npm install
+npm run dev     # 开发服务器 http://127.0.0.1:5173，/api 代理到 PW_API_TARGET（默认 http://127.0.0.1:61300）
+npm run build   # 类型检查并输出到 static/app/，提交构建产物
+```
 
 ### 8.2 计划 YAML 与 Submission 模型
 

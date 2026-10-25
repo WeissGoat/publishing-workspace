@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
@@ -400,27 +400,23 @@ def create_app(root: str | Path, *, export_jobs: ExportJobService | None = None)
 
     register_library_routes(app)
 
-    static_root = Path(__file__).with_name("static")
-    if static_root.is_dir():
-        if (static_root / "calendar.html").is_file():
-            @app.get("/calendar", include_in_schema=False)
-            def calendar_page():
-                return FileResponse(static_root / "calendar.html")
+    # 前端为 Vue 单页应用（源码在仓库根目录 frontend/，构建产物提交在 static/app/）
+    app_root = Path(__file__).with_name("static") / "app"
+    index_html = app_root / "index.html"
+    if index_html.is_file():
 
-            @app.get("/", include_in_schema=False)
-            def root_calendar_page():
-                return FileResponse(static_root / "calendar.html")
-        elif (static_root / "schedule.html").is_file():
-            @app.get("/", include_in_schema=False)
-            def schedule_page():
-                return FileResponse(static_root / "schedule.html")
+        def spa_page():
+            # 入口页每次重新验证，带哈希的静态资源由浏览器正常缓存
+            return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
 
-        if (static_root / "library.html").is_file():
-            @app.get("/library", include_in_schema=False)
-            def library_page():
-                return FileResponse(static_root / "library.html")
+        for page_path in ("/", "/library", "/calendar"):
+            app.add_api_route(page_path, spa_page, methods=["GET"], include_in_schema=False)
 
-        app.mount("/", StaticFiles(directory=static_root, html=True), name="static")
+        @app.get("/schedule.html", include_in_schema=False)
+        def legacy_schedule_page():
+            return RedirectResponse("/calendar", status_code=307)
+
+        app.mount("/app", StaticFiles(directory=app_root), name="app")
 
     return app
 

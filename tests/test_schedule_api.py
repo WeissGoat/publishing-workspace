@@ -120,20 +120,6 @@ def test_node_search_api_returns_paginated_candidates(tmp_path: Path):
     }
 
 
-def test_schedule_api_serves_static_calendar(tmp_path: Path):
-    client = client_for(tmp_path)
-
-    response = client.get("/schedule.html")
-
-    assert response.status_code == 200
-    assert "月度投稿计划" in response.text
-    assert "classify.yaml 二次过滤" in response.text
-    assert "添加筛选" in response.text
-    assert "Subtype" in response.text
-    assert "创建空计划" not in response.text
-    assert "锁定计划" not in response.text
-
-
 def test_schedule_api_lists_existing_tasks(tmp_path: Path):
     paths, _, _ = init_workspace(tmp_path)
     TaskRepository.create(TaskPaths.from_workspace(paths, "demo-task"), title="演示任务")

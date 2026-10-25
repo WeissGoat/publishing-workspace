@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Publishing Workspace</title>
+    <script>
+      // 首帧前应用主题，避免浅色闪烁
+      try {
+        var light = (localStorage.getItem("pw_theme") || "").replace(/"/g, "") === "light";
+        document.documentElement.dataset.theme = light ? "light" : "dark";
+        document.documentElement.style.background = light ? "#f3f4f7" : "#0e1014";
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
